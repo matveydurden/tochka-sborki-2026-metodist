@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.local/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+.ipynb_checkpoints/
+venv/
+ai.env
+logs/*.log
+.idea/
+.vscode/
