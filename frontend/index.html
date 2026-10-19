@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#009c45">
+  <meta name="description" content="Методист — рабочее пространство для подготовки образовательных программ. Подготовка, согласование и сохранение учебных материалов.">
+  <title>Методист — рабочее пространство</title>
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Перейти к программе</a>
+  <header class="app-header">
+    <a class="brand" href="./" aria-label="Методист — рабочее пространство"><img src="assets/logo.svg" alt="" width="38" height="38"><span>Методист<span class="brand-dot">.</span></span></a>
+    <span class="header-divider"></span>
+    <div class="project-heading"><span class="eyebrow">ОБРАЗОВАТЕЛЬНАЯ ПРОГРАММА</span><h1 id="project-title"></h1></div>
+    <span class="badge draft" id="draft-label">Черновик</span>
+    <div class="header-actions"><span class="session-status" id="session-status"></span><button class="button subtle" data-action="new-course" title="Новая программа"><span data-icon="plus"></span><span class="optional">Новая</span></button><button class="button" data-action="preview"><span data-icon="eye"></span><span class="optional">Предпросмотр</span></button><button class="button primary" data-action="export"><span data-icon="download"></span>Экспорт</button></div>
+  </header>
+  <div class="context-bar"><div class="breadcrumb"><span data-icon="folder"></span> <button class="text-button" data-action="courses">Мои программы</button> <span>/</span> <strong>Программа</strong></div><span class="demo-label" id="service-label"><span></span> Подключение к серверу…</span></div>
+  <main id="workspace" class="workspace">
+    <section class="panel document-panel" aria-label="Материалы программы" id="document-panel">
+      <div class="materials-nav"><nav class="material-tabs" aria-label="Материалы"><button data-tab="program" class="material-tab active" aria-current="page"><span data-icon="file"></span>Программа</button><button data-tab="tests" class="material-tab"><span data-icon="check-square"></span>Тесты</button><button data-tab="tasks" class="material-tab"><span data-icon="clipboard"></span>Задания</button><button data-tab="slides" class="material-tab"><span data-icon="monitor"></span>Слайды</button></nav><button class="icon-button" data-action="expand" data-panel="document-panel" aria-label="Развернуть материалы"><span data-icon="expand"></span></button></div>
+      <div id="save-error" class="save-error" role="alert" hidden></div><div class="document-toolbar"><div class="file-name"><span data-icon="file"></span><span id="file-name">Программа</span><span class="file-type">ДЕМО</span></div><div class="toolbar-actions"><div class="view-switch" role="group" aria-label="Режим просмотра"><button data-view="preview" aria-pressed="true" title="Предпросмотр"><span data-icon="eye"></span></button><button data-view="editor" aria-pressed="false" title="Редактор"><span data-icon="edit"></span></button></div><span class="tool-divider"></span><button class="icon-button small" data-action="zoom-out" aria-label="Уменьшить"><span data-icon="minus"></span></button><span id="zoom-label">100%</span><button class="icon-button small" data-action="zoom-in" aria-label="Увеличить"><span data-icon="plus"></span></button></div></div>
+      <div class="document-canvas" id="document-canvas" tabindex="0" aria-label="Содержимое материала"></div>
+      <footer class="document-footer"><span><span class="status-dot"></span> <span id="document-status">Черновик для проверки методистом</span></span><button class="text-button" data-action="editor"><span data-icon="edit"></span>Редактировать</button></footer>
+    </section>
+    <div class="column-resizer"><input id="column-size" type="range" min="38" max="65" value="50" aria-label="Ширина области материалов" title="Ширина области материалов"></div>
+    <div class="right-column" id="right-column">
+      <section class="panel parameters-panel" id="parameters-panel" aria-labelledby="parameters-title">
+        <div class="panel-heading"><div class="heading-icon"><span data-icon="settings"></span></div><h2 id="parameters-title">Параметры программы</h2><button class="icon-button" data-action="expand" data-panel="parameters-panel" aria-label="Развернуть параметры"><span data-icon="expand"></span></button></div>
+        <div class="parameters-body"><form id="parameters-form" class="parameters-form"><label for="type">Тип программы</label><select id="type" name="type"><option>Повышение квалификации</option><option>Общеразвивающая</option><option>Стажировка</option></select><label for="audience">Аудитория</label><input id="audience" name="audience" required maxlength="200"><label for="hours">Объём обучения</label><div class="input-suffix"><input id="hours" name="hours" type="number" min="16" max="500" required><span>часов</span></div><label for="format">Формат</label><select id="format" name="format"><option>Очно-заочно</option><option>Очно</option><option>Заочно</option><option>Дистанционно</option></select><label for="duration">Срок обучения</label><input id="duration" name="duration" required maxlength="80"><label for="group">Группа</label><div class="input-suffix"><input id="group" name="group" type="number" min="1" max="10000" required><span>человек</span></div><label for="assessment">Аттестация</label><select id="assessment" name="assessment"><option>Защита проекта</option><option>Тестирование</option><option>Практическое задание</option></select></form>
+        <p class="field-help" id="parameter-notice" aria-live="polite">Параметры можно менять. Правки требуют согласования каркаса.</p>
+        <div id="validation-summary"></div>
+        <details class="checks-details"><summary><span data-icon="shield"></span>Проверки программы<span id="check-count"></span><span data-icon="chevron"></span></summary><div id="checks-list"></div></details>
+        <div class="generation-actions"><button class="button compact" data-action="generate-skeleton" id="generate-skeleton">Сформировать каркас</button><button class="button compact primary" data-action="generate-materials" id="generate-materials">Подготовить материалы</button></div><p class="inline-error" id="generation-error" role="alert"></p><div class="approval-row"><span id="approval-status"></span><button class="button compact" id="approve-button" data-action="approve">Согласовать каркас<span data-icon="arrow-right"></span></button></div></div>
+      </section>
+      <div class="row-resizer"><input id="row-size" type="range" min="32" max="70" value="54" aria-label="Высота области параметров" title="Высота области параметров"></div>
+      <section class="panel chat-panel" id="chat-panel" aria-labelledby="chat-title"><div class="panel-heading"><img class="assistant-logo" src="assets/logo.svg" alt="" width="32" height="32"><h2 id="chat-title">Диалог с ИИ</h2><span class="badge muted" id="provider-badge">ИИ</span><button class="icon-button" data-action="expand" data-panel="chat-panel" aria-label="Развернуть диалог"><span data-icon="expand"></span></button></div><div class="chat-messages" id="chat-messages" role="log" aria-label="Сообщения"></div><div class="chat-bottom"><div id="attachments" class="attachments"></div><p class="inline-error" id="chat-error" role="alert"></p><form class="composer" id="chat-form"><button type="button" class="icon-button" data-action="attach" aria-label="Прикрепить референсы"><span data-icon="paperclip"></span></button><textarea id="chat-input" rows="2" maxlength="3000" placeholder="Уточнить или изменить программу…" aria-label="Сообщение ИИ"></textarea><button type="submit" class="send-button" id="send-button" aria-label="Отправить сообщение"><span data-icon="arrow-up"></span></button></form><input id="reference-input" type="file" accept=".pdf,.docx,.txt" multiple hidden><p class="chat-disclaimer">Изменения применяются после вашего подтверждения</p></div></section>
+    </div>
+  </main>
+  <dialog id="main-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
