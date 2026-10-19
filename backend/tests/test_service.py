@@ -19,15 +19,15 @@ def draft():
 
 def skeleton():
     return dict(goal='Обрабатывать данные на Python', competencies=['Читать и обрабатывать таблицы'],
-                modules=[dict(title='Основы', hours=8), dict(title='Данные', hours=8)])
+                competencyMap=[dict(competencyIndex=0,knowledge=['Типы'],skills=['Очистка'],abilities=['Проверка'])],
+                modules=[dict(title=title,hours=8,topics=[dict(title=title,lectureHours=2,practiceHours=4,labHours=0,selfStudyHours=1,assessmentHours=1,competencyIndices=[0])]) for title in ['Основы','Данные']])
 
 
 def materials():
-    return dict(modules=[dict(title='Основы', hours=8, content='Переменные и циклы'),
-                         dict(title='Данные', hours=8, content='Чтение таблиц и очистка')],
-                tests=[dict(moduleIndex=i, question='Вопрос по модулю', answer='Ответ') for i in range(2)],
-                tasks=[dict(moduleIndex=i, text='Практическое задание', criteria='Корректное решение') for i in range(2)],
-                slides=[dict(moduleIndex=i, title='Заголовок', body='Содержание') for i in range(2)])
+    return dict(modules=[dict(m,content='Объяснение с примером',lecturePlan='Цель; показ; практика; вывод') for m in skeleton()['modules']],
+                tests=[dict(moduleIndex=i,competencyIndices=[0],question='Вопрос по модулю',answer='Ответ') for i in range(2)],
+                tasks=[dict(moduleIndex=i,competencyIndices=[0],text='Практическое задание',criteria='Корректное решение') for i in range(2)],
+                slides=[dict(moduleIndex=i,competencyIndices=[0],title='Заголовок',body='Содержание') for i in range(2)])
 
 
 class ServiceTests(unittest.TestCase):
@@ -178,7 +178,7 @@ class ServiceTests(unittest.TestCase):
         seen=[]
         def complete(system,user,schema):
             seen.append(user)
-            return dict(content='Подробное объяснение темы',tests=[dict(question='Вопрос',answer='Ответ')],task=dict(text='Задание',criteria='Критерий'),slide=dict(title='Слайд',body='Текст слайда'))
+            return dict(content='Подробное объяснение темы',lecturePlan='План лекции',tests=[dict(question='Вопрос',answer='Ответ',competencyIndices=[0])],tasks=[dict(text='Задание',criteria='Критерий',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст слайда',competencyIndices=[0])])
         result=cfg.material_bundle(course,'Практический курс',complete)
         patch=service.proposal_patch('materials',course,result)
         self.assertEqual(len(seen),2)
@@ -191,5 +191,50 @@ class ServiceTests(unittest.TestCase):
         self.store.recover_jobs()
         self.assertEqual(self.store.get(record['id'])['job']['status'],'failed')
         self.assertEqual(self.store.get(record['id'])['course']['modules'],[])
+
+    def test_generation_reports_duration_tokens_and_estimated_gateway_cost(self):
+        class MeasuredConfig(service.Config):
+            def generate(self,stage,course,prompt):
+                self.usage.append(dict(prompt_tokens=1000,completion_tokens=2000))
+                return skeleton()
+        self.app=service.Application(self.store,config=MeasuredConfig(key='test',model='GigaChat/GigaChat-3-Pro',base_url='https://hub.gigaschool.ru/api/v1/llm/v1'))
+        record=self.store.create(draft());job=self.generate(record)
+        self.assertEqual(job['status'],'completed')
+        self.assertEqual(job.get('metrics',{}).get('inputTokens'),1000)
+        self.assertEqual(job['metrics']['outputTokens'],2000)
+        self.assertGreaterEqual(job['metrics']['seconds'],0)
+        self.assertAlmostEqual(job['metrics']['estimatedRub'],.42581,places=5)
+
+    def test_material_edit_preserves_skeleton_approval_and_does_not_stale_itself(self):
+        record=self.accepted();record=self.app.approve(record['id'],record['revision'])
+        job=self.generate(record,'materials','manual-material');record=self.app.accept(job['proposalId'],record['revision'])
+        modules=[dict(m) for m in record['course']['modules']];modules[0]['content']='Исправленное объяснение'
+        saved=self.store.save(record['id'],record['revision'],dict(record['course'],modules=modules))
+        self.assertTrue(saved['course']['approved'])
+        self.assertFalse(saved['course']['materialsStale'])
+        self.assertTrue(saved['checks']['materials']['valid'])
+
+    def test_revision_preserves_stale_marker_until_full_material_regeneration(self):
+        record=self.accepted();record=self.app.approve(record['id'],record['revision'])
+        job=self.generate(record,'materials','first-full');record=self.app.accept(job['proposalId'],record['revision'])
+        modules=[dict(m) for m in record['course']['modules']];modules[0]['title']='Другая тема'
+        record=self.store.save(record['id'],record['revision'],dict(record['course'],modules=modules))
+        record=self.app.approve(record['id'],record['revision'])
+        self.app.generator=lambda stage,course,prompt:{k:course[k] for k in ['goal','competencies','competencyMap','modules','tests','tasks','slides']}
+        job=self.generate(record,'revision','stale-chat');self.assertEqual(job['status'],'completed')
+        saved=self.app.accept(job['proposalId'],record['revision'])
+        self.assertTrue(saved['course']['materialsStale'])
+        self.assertFalse(saved['checks']['materials']['valid'])
+
+    def test_material_only_revision_preserves_approval(self):
+        record=self.accepted();record=self.app.approve(record['id'],record['revision'])
+        job=self.generate(record,'materials','full-before-revise');record=self.app.accept(job['proposalId'],record['revision'])
+        def revise(stage,course,prompt):
+            course['modules'][0]['content']='Исправленный пример'
+            return {k:course[k] for k in ['goal','competencies','competencyMap','modules','tests','tasks','slides']}
+        self.app.generator=revise
+        job=self.generate(record,'revision','only-content');self.assertEqual(job['status'],'completed')
+        saved=self.app.accept(job['proposalId'],record['revision'])
+        self.assertTrue(saved['course']['approved'])
 
 if __name__ == '__main__': unittest.main()

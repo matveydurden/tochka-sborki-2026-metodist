@@ -26,3 +26,28 @@ test('новый курс не получает модули и материал
   assert.equal(state.isDemo,false);
   assert.equal(validate(state).hours.valid,false);
 });
+test('проверка материалов обнаруживает пустой, частичный и устаревший комплект',()=>{
+  const state=createCourse({fresh:true});
+  assert.equal(validate(state).materials.valid,false);
+  state.modules=[{title:'Основы',hours:16,content:'Объяснение'}];
+  state.tests=[{moduleIndex:0,question:'Вопрос',answer:'Ответ'}];
+  state.tasks=[{moduleIndex:0,text:'Задание',criteria:'Критерий'}];
+  assert.equal(validate(state).materials.valid,false);
+  state.slides=[{moduleIndex:0,title:'Слайд',body:'Текст'}];
+  assert.equal(validate(state).materials.valid,true);
+  state.materialsStale=true;
+  assert.equal(validate(state).materials.valid,false);
+});
+
+test('редактирование модуля сохраняет темы и план лекции',async()=>{
+  const {preserveModule}=await import('../curriculum.js');
+  const module={title:'Основы',hours:16,topics:[{title:'Тема'}],lecturePlan:'План'};
+  const changed=preserveModule(module,{content:'Ручной текст'});
+  assert.deepEqual(changed.topics,module.topics);assert.equal(changed.lecturePlan,'План');
+});
+
+test('правка материала сохраняет согласование каркаса',()=>{
+  const state=createCourse();state.approved=true;
+  const changed=updateCourse(state,{tests:[{moduleIndex:0,question:'Правка',answer:'Ключ'}]});
+  assert.equal(changed.approved,true);
+});

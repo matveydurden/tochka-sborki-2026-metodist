@@ -13,6 +13,7 @@ export async function request(path, {method = 'GET', body} = {}) {
   let data;
   try { data = await response.json(); }
   catch { throw new ApiError('Сервер вернул неверный ответ. Проверьте, что запущен backend.server.', response.status); }
+  if (response.status===401 && typeof window!=='undefined')window.dispatchEvent(new Event('session-expired'));
   if (!response.ok) throw new ApiError(data.error || 'Не удалось выполнить запрос.',response.status);
   return data;
 }

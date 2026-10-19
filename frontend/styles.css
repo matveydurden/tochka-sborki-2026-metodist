@@ -1866,3 +1866,5 @@ dialog::backdrop {
 @media(min-width:821px) and (max-height:850px) { :root { --top:68%; } .parameters-panel .panel-heading { padding-top:9px; padding-bottom:7px; } .generation-actions { margin:5px 0; } .generation-actions .button { padding:3px 7px; font-size:9px; } }
 
 .answer-box { white-space:pre-wrap; overflow-wrap:anywhere; }
+
+.module-detail{grid-column:1/-1;min-width:0}.module-detail summary{cursor:pointer;padding:10px 0}.hours-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}.topic-entry,.competency-entry,.source-entry{border:1px solid var(--border,#dce4de);border-radius:8px;padding:14px;margin:12px 0;min-width:0}.topic-entry label,.competency-entry label,.source-entry label,#sources-form label,#module-revision-form label{display:grid;gap:6px;margin:10px 0}.topic-entry select[multiple],.material-entry select[multiple]{height:auto;min-height:85px}.generation-actions{flex-wrap:wrap}.attachment .text-button{font-size:12px}.preserve-lines{overflow-wrap:anywhere}

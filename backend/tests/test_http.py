@@ -47,4 +47,12 @@ class HTTPTests(unittest.TestCase):
         with urllib.request.urlopen(self.url+path+'/export.docx') as response:
             self.assertTrue(response.read().startswith(b'PK'))
 
+    def test_extract_and_exports_use_real_routes(self):
+        import base64
+        status,result=self.call('/api/references/extract',dict(name='brief.txt',data=base64.b64encode('ИИ для учителей'.encode()).decode()))
+        self.assertEqual(status,200);self.assertIn('учителей',result['text'])
+        _,record=self.call('/api/courses',{'course':draft()})
+        for extension in ['pptx','moodle.xml']:
+            self.assertEqual(self.call('/api/courses/'+record['id']+'/export.'+extension)[0],422)
+
 if __name__=='__main__':unittest.main()
