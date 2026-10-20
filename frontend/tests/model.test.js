@@ -51,3 +51,40 @@ test('правка материала сохраняет согласовани�
   const changed=updateCourse(state,{tests:[{moduleIndex:0,question:'Правка',answer:'Ключ'}]});
   assert.equal(changed.approved,true);
 });
+
+test('покрытие результата проверяется отдельно в каждом модуле',()=>{
+  const state=createCourse({fresh:true});state.competencies=['Результат'];
+  state.competencyMap=[{competencyIndex:0,knowledge:['Знания'],skills:['Умения'],abilities:['Навыки']}];
+  state.modules=[0,1].map(i=>({title:`Модуль ${i+1}`,hours:8,topics:[{title:'Тема',lectureHours:8,competencyIndices:[0]}]}));
+  state.tests=[{moduleIndex:0,competencyIndices:[0]}];state.tasks=[0,1].map(moduleIndex=>({moduleIndex,competencyIndices:[0]}));
+  assert.equal(validate(state).coverage.valid,false);
+  assert.ok(validate(state).coverage.details.some(x=>x.includes('Модуль 2')&&x.includes('РО-1')));
+});
+
+test('уточнение перечисляет все недостающие ответы, а заполненный запрос пропускает',async()=>{
+  const {clarificationQuestions}=await import('../model.js');
+  const state=createCourse({fresh:true});state.audience=' ';state.level='не задан';state.duration='';
+  assert.deepEqual(clarificationQuestions(state).map(x=>x.field),['audience','level','duration']);
+  Object.assign(state,{audience:'Аналитики',level:'Без опыта',duration:'2 недели'});
+  assert.deepEqual(clarificationQuestions(state),[]);
+});
+
+test('срок нового курса уточняется у методиста и не подставляется из демо',()=>{
+  assert.equal(createCourse({fresh:true}).duration,'');
+});
+
+test('изменение срока снимает согласование программы',()=>{
+  const state=createCourse();state.approved=true;
+  assert.equal(updateCourse(state,{duration:'8 недель'}).approved,false);
+});
+
+test('перед применением материалов видны краткий текст и неподтверждённые источники',async()=>{
+  const {proposalWarnings}=await import('../model.js');
+  const state=createCourse({fresh:true});Object.assign(state,{goal:'Цель',competencies:['Результат'],competencyMap:[{competencyIndex:0,knowledge:['Знания'],skills:['Умения'],abilities:['Навыки']}],hours:16});
+  state.modules=[{title:'Модуль',hours:16,content:'Краткий текст',lecturePlan:'План',topics:[{title:'Тема',lectureHours:16,competencyIndices:[0]}]}];
+  state.tests=[{moduleIndex:0,competencyIndices:[0]}];state.tasks=[{moduleIndex:0,competencyIndices:[0]}];state.slides=[{moduleIndex:0}];
+  const warnings=proposalWarnings(state,'materials');
+  assert.ok(warnings.some(x=>x.key==='contentDepth'&&x.details.some(x=>x.includes('Модуль 1'))));
+  assert.ok(warnings.some(x=>x.key==='sources'));
+  assert.deepEqual(proposalWarnings(state,'skeleton'),[]);
+});

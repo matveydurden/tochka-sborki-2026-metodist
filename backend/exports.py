@@ -5,6 +5,13 @@ from xml.etree import ElementTree as ET
 from .curriculum import HOUR_FIELDS
 
 
+CHECK_LABELS={'materialCounts':'Количество оценочных материалов и слайдов','contentDepth':'Объём учебного текста (не предметная экспертиза)','hours':'Сумма часов','structure':'Полнота каркаса','materials':'Полнота материалов','topicHours':'Часы тем и видов работы','competencyMap':'Карта компетенций','coverage':'Покрытие темами, тестами и заданиями','lecturePlans':'Планы лекций','sources':'Подтверждение источников методистом'}
+
+def source_line(item):
+    status='ПОДТВЕРЖДЁН МЕТОДИСТОМ' if item['status']=='confirmed' else 'НЕ ПОДТВЕРЖДЁН — требуется проверка'
+    return f"{status}\n{item['title']}\n{item['url']}\n{item['evidence']}"
+
+
 def outcome_links(course,item):
     return ', '.join(f'РО-{i+1}: {course["competencies"][i]}' for i in item.get('competencyIndices',[])) or 'Связи не заданы'
 
@@ -21,6 +28,7 @@ def docx(course):
     general=course['type']=='Общеразвивающая'
     document.add_heading('Дополнительная общеразвивающая программа' if general else 'Дополнительная профессиональная программа повышения квалификации',0)
     document.add_heading(course['title'],1)
+    if course['type']=='Стажировка':document.add_paragraph('Стажировка оформляется как программа повышения квалификации.')
     document.add_paragraph('ЧЕРНОВИК. Утверждает руководитель после проверки методистом и предметным экспертом.')
     document.add_paragraph('Организация: ____________________\nУТВЕРЖДАЮ: ____________________\nПриказ № ____ от __________\nПреподаватель: ____________________\nПодпись: ____________________')
     if course.get('materialsStale'):document.add_paragraph('ВНИМАНИЕ: материалы устарели после изменения каркаса.')
@@ -89,11 +97,15 @@ def docx(course):
     confirmed=[s for s in course.get('sources',[]) if s['status']=='confirmed']
     if not confirmed:document.add_paragraph('Подтверждённые источники не добавлены. Литературу и нормативную базу должен проверить методист.')
     for item in confirmed:document.add_paragraph(f"{item['title']}\n{item['url']}\nПодтверждение методиста: {item['evidence']}")
+    heading('Неподтверждённые источники — не использовать как проверенную литературу')
+    for item in course.get('sources',[]):
+        if item['status']!='confirmed':document.add_paragraph(source_line(item))
     heading('Отчёт автоматической проверки')
     from .service import checks
-    labels={'hours':'Сумма часов','structure':'Полнота каркаса','materials':'Полнота материалов','topicHours':'Часы тем и видов работы','competencyMap':'Карта компетенций','coverage':'Покрытие темами, тестами и заданиями','lecturePlans':'Планы лекций','sources':'Подтверждение источников методистом'}
-    for key,result in checks(course).items():document.add_paragraph(f"{labels.get(key,key)}: {'пройдено' if result['valid'] else 'требует проверки/исправления'}")
-    document.add_paragraph('Проверка структуры не подтверждает предметную корректность. Автоматическая проверка существования внешних источников не выполнялась.')
+    for key,result in checks(course).items():
+        document.add_paragraph(f"{CHECK_LABELS.get(key,key)}: {'пройдено' if result['valid'] else 'требует проверки/исправления'}")
+        for detail in result.get('details',[]):document.add_paragraph(detail)
+    document.add_paragraph('Проверка структуры не подтверждает предметную корректность. Доступность внешних ссылок проверяется отдельно по запросу методиста и не подтверждает достоверность источников.')
     buffer=io.BytesIO();document.save(buffer);return buffer.getvalue()
 
 
@@ -103,8 +115,13 @@ def pptx(course):
     from pptx.dml.color import RGBColor
     from .service import Invalid
     if not course['slides']:raise Invalid('Слайды ещё не подготовлены.')
+    exported_slides=list(course['slides'])
+    source_lines=[source_line(item) for item in course.get('sources',[])] or ['Источники не добавлены. Литература требует проверки методистом.']
+    exported_slides.extend(dict(title='Источники и статус проверки',body=line,moduleIndex=0,appendix=True) for line in source_lines)
+    from .service import checks
+    exported_slides.extend(dict(title='Отчёт автоматической проверки',body=f"{CHECK_LABELS.get(key,key)}: {'пройдено' if result['valid'] else 'требует проверки/исправления'}"+('\n'+'\n'.join(result.get('details',[])) if result.get('details') else ''),moduleIndex=0,appendix=True) for key,result in checks(course).items())
     deck=Presentation();deck.slide_width=Inches(13.333);deck.slide_height=Inches(7.5)
-    for item in course['slides']:
+    for item in exported_slides:
         chunks=textwrap.wrap(item['body'],width=550,break_long_words=True,replace_whitespace=False) or ['']
         for part,body in enumerate(chunks):
             slide=deck.slides.add_slide(deck.slide_layouts[6])
@@ -117,8 +134,8 @@ def pptx(course):
             box(.7,.25,11.9,.5,course['title'],13,(0,124,61))
             box(.7,1,11.9,1.3,item['title']+(f' · {part+1}/{len(chunks)}' if len(chunks)>1 else ''),30)
             box(.7,2.5,11.9,3.9,body,22)
-            box(.7,6.8,11.9,.4,f"Черновик · Модуль {item['moduleIndex']+1} · Слайд {len(deck.slides)}",12)
-            slide.notes_slide.notes_text_frame.text=course['modules'][item['moduleIndex']].get('lecturePlan','')
+            box(.7,6.8,11.9,.4,f"Черновик · {'Проверки и источники' if item.get('appendix') else 'Модуль '+str(item['moduleIndex']+1)} · Слайд {len(deck.slides)}",12)
+            slide.notes_slide.notes_text_frame.text='Проверка структуры и объёма не подтверждает предметную корректность. Доступность ссылок проверяется отдельно по запросу методиста; её временный результат не включён в этот экспорт.' if item.get('appendix') else course['modules'][item['moduleIndex']].get('lecturePlan','')
     buffer=io.BytesIO();deck.save(buffer);return buffer.getvalue()
 
 

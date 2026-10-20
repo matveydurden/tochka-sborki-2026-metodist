@@ -30,3 +30,32 @@ class ExportTests(unittest.TestCase):
         root=ET.fromstring(moodle(course))
         self.assertEqual(root[0].find('questiontext/text').text,course['tests'][0]['question'])
         self.assertEqual(root[0].find('graderinfo/text').text,course['tests'][0]['answer'])
+
+    def test_unverified_sources_are_marked_in_both_office_exports(self):
+        from docx import Document
+        from pptx import Presentation
+        from backend.exports import pptx
+        course=self.course()
+        course['sources']=[dict(title='Непроверенная книга',url='https://example.org/book',status='unverified',evidence='')]
+        doc=Document(io.BytesIO(service.export_docx(course)))
+        word='\n'.join(p.text for p in doc.paragraphs)
+        deck=Presentation(io.BytesIO(pptx(course)))
+        slides='\n'.join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
+        for output in [word,slides]:
+            self.assertIn('НЕ ПОДТВЕРЖДЁН',output)
+            self.assertIn('Непроверенная книга',output)
+            self.assertIn('https://example.org/book',output)
+            self.assertIn('Отчёт автоматической проверки',output)
+
+    def test_failed_core_checks_include_numbers_and_module_names(self):
+        from docx import Document
+        from backend.exports import pptx
+        from pptx import Presentation
+        course=self.course();course['modules'][0]['hours']=9;course['tests']=[]
+        doc=Document(io.BytesIO(service.export_docx(course)))
+        word='\n'.join(p.text for p in doc.paragraphs)
+        deck=Presentation(io.BytesIO(pptx(course)))
+        slides='\n'.join(shape.text for slide in deck.slides for shape in slide.shapes if shape.has_text_frame)
+        for output in [word,slides]:
+            self.assertIn('17 / 16 ч',output)
+            self.assertIn('Модуль 1',output)

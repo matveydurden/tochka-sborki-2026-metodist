@@ -41,3 +41,15 @@ class AccessTests(unittest.TestCase):
         app=self.server.app
         with self.assertRaises(ValueError):make_server(app,0,host='0.0.0.0')
         with self.assertRaises(ValueError):make_server(app,0,host='0.0.0.0',password='abc',public_origin='http://example.com')
+
+    def test_source_checks_require_team_session_and_valid_origin(self):
+        from unittest.mock import patch
+        with patch('backend.urlcheck.check',return_value={'status':'accessible'}) as probe:
+            self.assertEqual(self.call('/api/sources/check',{'url':'https://example.org'})[0],401)
+            probe.assert_not_called()
+            _,_,headers=self.call('/api/session',{'password':'team-secret'})
+            cookie=headers['Set-Cookie']
+            self.assertEqual(self.call('/api/sources/check',{'url':'https://example.org'},cookie,headers={'Origin':'https://evil.example'})[0],403)
+            probe.assert_not_called()
+            self.assertEqual(self.call('/api/sources/check',{'url':'https://example.org'},cookie)[0],200)
+            probe.assert_called_once()

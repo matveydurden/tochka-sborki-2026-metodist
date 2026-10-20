@@ -55,4 +55,23 @@ class HTTPTests(unittest.TestCase):
         for extension in ['pptx','moodle.xml']:
             self.assertEqual(self.call('/api/courses/'+record['id']+'/export.'+extension)[0],422)
 
+
+
+    def test_source_check_is_explicit_small_post_and_does_not_change_course(self):
+        from unittest.mock import patch
+        _,record=self.call('/api/courses',{'course':draft()})
+        result=dict(status='accessible',httpStatus=200,checkedAt='2026-10-20T07:00:00+00:00',message='Страница доступна')
+        with patch('backend.urlcheck.check',return_value=result) as probe:
+            status,data=self.call('/api/sources/check',{'url':'https://example.org'})
+            self.assertEqual(status,200);self.assertEqual(data,result)
+            probe.assert_called_once_with('https://example.org')
+        self.assertEqual(self.call('/api/courses/'+record['id'])[1],record)
+        with patch('backend.urlcheck.check') as probe:
+            self.assertEqual(self.call('/api/sources/check',{'url':'https://example.org','extra':True})[0],422)
+            self.assertEqual(self.call('/api/sources/check',{'url':'x'*5000})[0],422)
+            probe.assert_not_called()
+        self.assertEqual(self.call('/api/sources/check')[0],404)
+        self.assertEqual(self.call('/api/sources/check',{'url':'https://127.0.0.1'})[0],422)
+
+
 if __name__=='__main__':unittest.main()

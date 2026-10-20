@@ -178,12 +178,13 @@ class ServiceTests(unittest.TestCase):
         seen=[]
         def complete(system,user,schema):
             seen.append(user)
-            return dict(content='Подробное объяснение темы',lecturePlan='План лекции',tests=[dict(question='Вопрос',answer='Ответ',competencyIndices=[0])],tasks=[dict(text='Задание',criteria='Критерий',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст слайда',competencyIndices=[0])])
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы' for key in schema['properties']}
+            return dict(content='Подробное объяснение темы',lecturePlan='План лекции',tests=[dict(question='Вопрос',answer='Ответ',competencyIndices=[0])]*3,tasks=[dict(text='Задание',criteria='Критерий',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст слайда',competencyIndices=[0])]*4)
         result=cfg.material_bundle(course,'Практический курс',complete)
         patch=service.proposal_patch('materials',course,result)
-        self.assertEqual(len(seen),2)
+        self.assertEqual(len(seen),4)
         self.assertEqual([m['hours'] for m in patch['modules']],[8,8])
-        self.assertEqual([t['moduleIndex'] for t in patch['tests']],[0,1])
+        self.assertEqual([t['moduleIndex'] for t in patch['tests']],[0,0,0,1,1,1])
 
     def test_restart_recovers_interrupted_job(self):
         record=self.store.create(draft())
@@ -238,3 +239,42 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(saved['course']['approved'])
 
 if __name__ == '__main__': unittest.main()
+
+class ClarificationTests(unittest.TestCase):
+    setUp=ServiceTests.setUp
+    tearDown=ServiceTests.tearDown
+    generate=ServiceTests.generate
+    wait=ServiceTests.wait
+    def test_incomplete_request_lists_all_questions_before_any_job_or_model_call(self):
+        record=self.store.create(dict(draft(),audience='',level='не задан',duration=''))
+        with self.assertRaises(service.Invalid) as caught:self.generate(record)
+        for word in ['аудитория','уровень','срок']:self.assertIn(word,str(caught.exception).lower())
+        self.assertIsNone(self.store.get(record['id'])['job'])
+
+class DeadlineTests(unittest.TestCase):
+    setUp=ServiceTests.setUp
+    tearDown=ServiceTests.tearDown
+    generate=ServiceTests.generate
+    wait=ServiceTests.wait
+    def test_late_success_is_discarded_and_course_preserved(self):
+        from unittest.mock import patch
+        record=self.store.create(draft())
+        def slow(*args):time.sleep(.03);return skeleton()
+        self.app.generator=slow
+        with patch.dict(service.GENERATION_BUDGETS,{'skeleton':.01}):
+            job=self.generate(record)
+        self.assertEqual(job['status'],'failed')
+        self.assertIn('время',job['error'].lower())
+        self.assertEqual(self.store.get(record['id'])['course']['modules'],[])
+        self.assertIsNone(self.store.get(record['id'])['proposal'])
+
+class DurationApprovalTests(unittest.TestCase):
+    setUp=ServiceTests.setUp
+    tearDown=ServiceTests.tearDown
+    generate=ServiceTests.generate
+    wait=ServiceTests.wait
+    accepted=ServiceTests.accepted
+    def test_duration_change_requires_reapproval(self):
+        record=self.accepted();record=self.app.approve(record['id'],record['revision'])
+        saved=self.store.save(record['id'],record['revision'],dict(record['course'],duration='8 недель'))
+        self.assertFalse(saved['course']['approved'])

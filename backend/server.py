@@ -64,6 +64,17 @@ class Handler(BaseHTTPRequestHandler):
             try:app.config.ready();configured=True
             except Unavailable:configured=False
             return self.reply(200,dict(configured=configured,model=app.config.model,provider=app.config.provider,requiresLogin=bool(access.password),authenticated=access.authenticated(cookie),publicDemo=bool(self.server.public_origin)))
+        if method=='POST' and path=='/api/sources/check':
+            if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length',[]))!=1:raise Invalid('Требуется однозначный размер JSON-запроса.')
+            timeout=self.connection.gettimeout()
+            try:
+                self.connection.settimeout(5)
+                body=self.body(maximum=4096)
+            except TimeoutError:raise Invalid('Превышено время чтения запроса.') from None
+            finally:self.connection.settimeout(timeout)
+            if set(body)!={'url'}:raise Invalid('Укажите только поле url.')
+            from .urlcheck import check
+            return self.reply(200,check(body['url']))
         if method=='POST' and path=='/api/references/extract':
             from .references import extract
             return self.reply(200,extract(self.body(maximum=28_100_000)))
