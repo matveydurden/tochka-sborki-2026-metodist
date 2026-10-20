@@ -1,0 +1,90 @@
+{
+  "source": "https://git.hub.gigaschool.ru/api/v1/repos/tochka-sborki-2026-team-109/project/activities/feeds",
+  "retrieved_on": "2026-10-20",
+  "events": [
+    {
+      "id": 6514,
+      "type": "commit_repo",
+      "created_at": "2026-10-20T08:32:34Z",
+      "actor": "tochka-sborki-2026-team-109",
+      "ref": "refs/heads/main",
+      "compare_url": "https://git.hub.gigaschool.ru/tochka-sborki-2026-team-109/project/compare/72730e8d63ef7a200554ee37fecf34efd5507238...68dda3f3288760e39ad35b8ad8be09afcdab1d31",
+      "commits": [
+        {
+          "sha": "68dda3f3288760e39ad35b8ad8be09afcdab1d31",
+          "message": "docs: описать обновление и проверку развёрнутой версии",
+          "timestamp": "2026-10-20T11:32:33+03:00"
+        }
+      ]
+    },
+    {
+      "id": 6494,
+      "type": "commit_repo",
+      "created_at": "2026-10-20T08:26:33Z",
+      "actor": "tochka-sborki-2026-team-109",
+      "ref": "refs/heads/main",
+      "compare_url": "https://git.hub.gigaschool.ru/tochka-sborki-2026-team-109/project/compare/d5253c32af0301fbda2199607020ce96e752008a...72730e8d63ef7a200554ee37fecf34efd5507238",
+      "commits": [
+        {
+          "sha": "72730e8d63ef7a200554ee37fecf34efd5507238",
+          "message": "feat: уточнение требований, проверки материалов и безопасные источники",
+          "timestamp": "2026-10-20T11:26:31+03:00"
+        }
+      ]
+    },
+    {
+      "id": 5542,
+      "type": "commit_repo",
+      "created_at": "2026-10-19T18:49:04Z",
+      "actor": "tochka-sborki-2026-team-109",
+      "ref": "refs/heads/main",
+      "compare_url": "https://git.hub.gigaschool.ru/tochka-sborki-2026-team-109/project/compare/8e3c4dd340edce6164f2c8ab13fb22e92e2b269e...d5253c32af0301fbda2199607020ce96e752008a",
+      "commits": [
+        {
+          "sha": "d5253c32af0301fbda2199607020ce96e752008a",
+          "message": "fix: исправить перенос кнопок на мобильном экране",
+          "timestamp": "2026-10-19T21:49:02+03:00"
+        }
+      ]
+    },
+    {
+      "id": 5532,
+      "type": "commit_repo",
+      "created_at": "2026-10-19T18:42:54Z",
+      "actor": "tochka-sborki-2026-team-109",
+      "ref": "refs/heads/main",
+      "compare_url": "https://git.hub.gigaschool.ru/tochka-sborki-2026-team-109/project/compare/7f6f99f373fcdb3692a3054638a8d562876ee64e...8e3c4dd340edce6164f2c8ab13fb22e92e2b269e",
+      "commits": [
+        {
+          "sha": "8e3c4dd340edce6164f2c8ab13fb22e92e2b269e",
+          "message": "docs: добавить демо и воспроизводимые контрольные прогоны",
+          "timestamp": "2026-10-19T21:42:52+03:00"
+        }
+      ]
+    },
+    {
+      "id": 5511,
+      "type": "commit_repo",
+      "created_at": "2026-10-19T18:34:28Z",
+      "actor": "tochka-sborki-2026-team-109",
+      "ref": "refs/heads/main",
+      "compare_url": "https://git.hub.gigaschool.ru/tochka-sborki-2026-team-109/project/compare/0abcf559528b56217d5c6c7f0adc2da38ada4d32...7f6f99f373fcdb3692a3054638a8d562876ee64e",
+      "commits": [
+        {
+          "sha": "7f6f99f373fcdb3692a3054638a8d562876ee64e",
+          "message": "feat: реализовать Методист и запустить демо для технической оценки",
+          "timestamp": "2026-10-19T21:34:26+03:00"
+        }
+      ]
+    },
+    {
+      "id": 128,
+      "type": "create_repo",
+      "created_at": "2026-10-17T04:10:57Z",
+      "actor": "admin",
+      "ref": "",
+      "compare_url": null,
+      "commits": []
+    }
+  ]
+}
