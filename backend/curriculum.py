@@ -53,18 +53,43 @@ def extend(data,course):
 
 def checks(course):
     modules=course['modules'];count=len(course['competencies'])
-    topic_hours=bool(modules) and all(m.get('topics') and sum(sum(t[k] for k in HOUR_FIELDS) for t in m['topics'])==m['hours'] for m in modules)
+    details={key:[] for key in ['topicHours','competencyMap','coverage','lecturePlans','sources']}
     mapped={x['competencyIndex'] for x in course.get('competencyMap',[]) if all(x.get(k) for k in ['knowledge','skills','abilities'])}
     taught={i for m in modules for t in m.get('topics',[]) for i in t.get('competencyIndices',[])}
-    tested={i for t in course['tests'] for i in t.get('competencyIndices',[])}
-    practised={i for t in course['tasks'] for i in t.get('competencyIndices',[])}
-    missing=[i for i in range(count) if i not in mapped&taught&tested&practised]
-    skeleton_coverage=bool(count) and set(range(count))<=mapped&taught
+    missing=[]
+    for i in range(count):
+        if i not in mapped:details['competencyMap'].append(f'РО-{i+1}: заполните знания, умения и навыки.')
+        if i not in taught:details['competencyMap'].append(f'РО-{i+1}: укажите раскрывающую его тему.')
+    for mi,module in enumerate(modules):
+        label=f"Модуль {mi+1} «{module['title']}»"
+        topics=module.get('topics',[])
+        total=sum(sum(t[k] for k in HOUR_FIELDS) for t in topics)
+        if not topics or total!=module['hours']:details['topicHours'].append(f"{label}: темы — {total} ч, модуль — {module['hours']} ч. Распределите часы тем.")
+        if not topics or (any(t.get('lectureHours',0) for t in topics) and not module.get('lecturePlan')):details['lecturePlans'].append(label+': добавьте темы и план лекции.')
+        local={i for t in topics for i in t.get('competencyIndices',[])}
+        for i in sorted(local):
+            absent=[name for key,name in [('tests','тест'),('tasks','задание')] if not any(x['moduleIndex']==mi and i in x.get('competencyIndices',[]) for x in course[key])]
+            if absent:
+                missing.append(i)
+                details['coverage'].append(f"{label}, РО-{i+1}: добавьте {' и '.join(absent)} со связью с результатом.")
+    for i in range(count):
+        if i not in mapped&taught:
+            missing.append(i);details['coverage'].append(f'РО-{i+1}: не заполнена карта или нет темы.')
+    counts=[]
+    for i,module in enumerate(modules):
+        for key,label,minimum,maximum in [('tests','тестов',3,20),('tasks','заданий',1,10),('slides','слайдов',4,8)]:
+            count_items=sum(x['moduleIndex']==i for x in course[key])
+            if not minimum<=count_items<=maximum:counts.append(f"Модуль {i+1} «{module['title']}»: {label} — {count_items}, ориентир {minimum}–{maximum}.")
+    depth=[f"Модуль {i+1} «{m['title']}»: {len(m.get('content','').split())} слов; ориентир учебного текста — не менее 600 слов. Это проверка объёма, предметное качество оценивает эксперт." for i,m in enumerate(modules) if len(m.get('content','').split())<600]
     sources=course.get('sources',[])
-    return dict(topicHours=dict(valid=bool(topic_hours)),competencyMap=dict(valid=skeleton_coverage),
-                coverage=dict(valid=bool(count) and not missing,missing=missing),
-                lecturePlans=dict(valid=bool(modules) and all(m.get('lecturePlan') for m in modules if any(t.get('lectureHours',0) for t in m.get('topics',[]))) and all(m.get('topics') for m in modules)),
-                sources=dict(valid=bool(sources) and all(s['status']=='confirmed' for s in sources),unverified=sum(s['status']!='confirmed' for s in sources)))
+    if not sources:details['sources'].append('Добавьте источники и сведения об их проверке.')
+    for source in sources:
+        if source['status']!='confirmed':details['sources'].append(f"НЕ ПОДТВЕРЖДЁН: {source['title']}. Проверьте первоисточник и укажите свидетельство проверки.")
+    return dict(materialCounts=dict(valid=bool(modules) and not counts,details=counts),contentDepth=dict(valid=bool(modules) and not depth,details=depth),topicHours=dict(valid=bool(modules) and not details['topicHours'],details=details['topicHours']),
+                competencyMap=dict(valid=bool(count) and not details['competencyMap'],details=details['competencyMap']),
+                coverage=dict(valid=bool(count) and not missing,missing=sorted(set(missing)),details=details['coverage']),
+                lecturePlans=dict(valid=bool(modules) and not details['lecturePlans'],details=details['lecturePlans']),
+                sources=dict(valid=bool(sources) and not details['sources'],unverified=sum(s['status']!='confirmed' for s in sources),details=details['sources']))
 
 
 def schema(stage,course):
@@ -85,5 +110,5 @@ def schema(stage,course):
 
 
 def skeleton_identity(course):
-    fields=['title','goal','competencies','competencyMap','references','audience','level','hours','type','format','assessment']
+    fields=['title','goal','competencies','competencyMap','references','audience','level','hours','duration','type','format','assessment']
     return dict(**{k:course.get(k) for k in fields},modules=[{k:m.get(k) for k in ['title','hours','topics']} for m in course['modules']])

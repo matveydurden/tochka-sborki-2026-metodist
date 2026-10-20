@@ -1,5 +1,5 @@
-import { createCourse, validate, updateCourse } from './model.js';
-import { request } from './api.js';
+import { createCourse, validate, updateCourse, clarificationQuestions, proposalWarnings } from './model.js';
+import { request, createSourceCheck, createGenerationGuard, waitForJob } from './api.js';
 import {hourFields,hourLabels,preserveModule} from './curriculum.js';
 
 // Icons use the Lucide outline vocabulary (ISC license, see assets/LUCIDE-LICENSE.txt).
@@ -21,6 +21,8 @@ const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${pat
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const decorate = (root = document) => root.querySelectorAll('[data-icon]').forEach(node => { node.innerHTML = icon(node.dataset.icon); });
+const sourceChecks=new WeakMap();
+const generationGuard=createGenerationGuard();
 let course = createCourse();
 let tab = 'program';
 let view = 'preview';
@@ -29,6 +31,7 @@ let busy = false;
 let dirty = false;
 let sessionChanged = false;
 let proposal = null;
+let pendingClarification=null;
 let attachments = [];
 let readingReferences=false;
 let newModuleIndex=-1;
@@ -70,15 +73,17 @@ function renderChecks() {
   $('#validation-summary').innerHTML = `<div class="check-summary ${ok ? '' : 'warning'}"><span>${icon(ok ? 'check' : 'warning')}${ok ? 'Каркас проверен' : 'Нужна правка каркаса'}</span><span>${icon(result.hours.valid ? 'check' : 'clock')}${result.hours.total} / ${course.hours} ч</span></div>`;
   $('#check-count').textContent = `${Object.values(result).filter(check=>!check.valid).length} замеч.`;
   $('#checks-list').innerHTML = [
-    [result.hours.valid, 'Сумма часов', result.hours.valid ? 'Часы модулей совпадают с общим объёмом.' : 'Скорректируйте объём или часы модулей в редакторе.'],
-    [result.structure.valid, 'Полнота каркаса', result.structure.valid ? 'Название, цель и модули заполнены.' : 'Заполните название, цель и добавьте модули.'],
-    [result.materials.valid, 'Связанные материалы', course.materialsStale ? 'Каркас изменён. Материалы сохранены, но требуют обновления.' : result.materials.valid ? 'Для каждого модуля есть содержание, тесты, задания и слайды.' : 'Комплект неполный: нужны содержание, тесты, задания и слайды каждого модуля.'],
-    [result.topicHours.valid, 'Часы тем и видов работы', result.topicHours.valid ? 'Суммы тем, модулей и видов работы совпадают.' : 'Добавьте темы и распределите часы по видам работы в редакторе.'],
-    [result.competencyMap.valid, 'Карта компетенций', 'Для каждого результата нужны знания, умения, навыки и раскрывающая его тема.'],
-    [result.coverage.valid, 'Покрытие результатов', 'Каждый результат должен быть связан с темой, тестом и семинарским заданием.'],
-    [result.lecturePlans.valid, 'Планы лекций', 'Для модулей с лекциями нужен план занятия.'],
-    [result.sources.valid, 'Источники', result.sources.valid ? 'Источники подтверждены методистом. Предметная корректность требует экспертной проверки.' : 'Добавьте источники и сведения об их проверке. Автоматическая проверка ссылок не выполнялась.'],
-  ].map(([valid, title, description]) => `<div class="check-item ${valid ? '' : 'warning'}">${icon(valid ? 'check' : 'warning')}<div><strong>${title}</strong><p>${description}</p></div></div>`).join('');
+    ['hours',result.hours.valid, 'Сумма часов', result.hours.valid ? 'Часы модулей совпадают с общим объёмом.' : 'Скорректируйте объём или часы модулей в редакторе.'],
+    ['structure',result.structure.valid, 'Полнота каркаса', result.structure.valid ? 'Название, цель и модули заполнены.' : 'Заполните название, цель и добавьте модули.'],
+    ['materials',result.materials.valid, 'Связанные материалы', course.materialsStale ? 'Каркас изменён. Материалы сохранены, но требуют обновления.' : result.materials.valid ? 'Для каждого модуля есть содержание, тесты, задания и слайды.' : 'Комплект неполный: нужны содержание, тесты, задания и слайды каждого модуля.'],
+    ['topicHours',result.topicHours.valid, 'Часы тем и видов работы', result.topicHours.valid ? 'Суммы тем, модулей и видов работы совпадают.' : 'Добавьте темы и распределите часы по видам работы в редакторе.'],
+    ['competencyMap',result.competencyMap.valid, 'Карта компетенций', 'Для каждого результата нужны знания, умения, навыки и раскрывающая его тема.'],
+    ['coverage',result.coverage.valid, 'Покрытие результатов', 'Каждый результат должен быть связан с темой, тестом и семинарским заданием.'],
+    ['lecturePlans',result.lecturePlans.valid, 'Планы лекций', 'Для модулей с лекциями нужен план занятия.'],
+    ['materialCounts',result.materialCounts.valid,'Количество оценочных материалов и слайдов','На модуль нужны минимум 3 вопроса, 1 задание и 4–8 слайдов.'],
+    ['contentDepth',result.contentDepth.valid,'Объём учебного текста','Проверка длины текста не заменяет предметную экспертизу. Краткий текст требует доработки.'],
+    ['sources',result.sources.valid, 'Источники', result.sources.valid ? 'Источники подтверждены методистом. Предметная корректность требует экспертной проверки.' : 'Добавьте источники и сведения об их проверке. Доступность HTTPS-ссылок можно проверить в «Источниках». Достоверность подтверждает методист.'],
+  ].map(([key, valid, title, description]) => `<div class="check-item ${valid ? '' : 'warning'}">${icon(valid ? 'check' : 'warning')}<div><strong>${title}</strong><p>${description}</p>${(result[key].details || []).map(detail=>`<p>${esc(detail)}</p>`).join('')}</div></div>`).join('');
   $('#approve-button').disabled = !ok || course.approved;
   $('#approve-button').innerHTML = course.approved ? `${icon('check')}Согласовано` : `Согласовать каркас${icon('arrow-right')}`;
   $('#approval-status').textContent = course.approved ? 'Подтверждено методистом' : 'Решение принимает методист';
@@ -147,10 +152,27 @@ function curriculumSummary(value) {
   return `<h3>Карта компетенций</h3>${(value.competencyMap || []).map(item=>`<p><strong>РО-${item.competencyIndex+1}</strong><br>Знания: ${esc(item.knowledge.join('; '))}<br>Умения: ${esc(item.skills.join('; '))}<br>Навыки: ${esc(item.abilities.join('; '))}</p>`).join('') || '<p>Карта не заполнена</p>'}<h3>Учебно-тематический план</h3>${value.modules.map((m,i)=>`<h4>${i+1}. ${esc(m.title)}</h4>${(m.topics || []).map((t,j)=>`<p><strong>${i+1}.${j+1}. ${esc(t.title)}</strong><br>${hourFields.map((k,n)=>`${hourLabels[n]}: ${t[k]} ч`).join(' · ')}<br>Результаты: ${(t.competencyIndices || []).map(n=>`РО-${n+1}`).join(', ')}</p>`).join('') || '<p>Темы не заполнены</p>'}${m.lecturePlan?`<details><summary>План лекции</summary><p class="preserve-lines">${esc(m.lecturePlan)}</p></details>`:''}`).join('')}<h3>Связи оценочных средств</h3>${['tests','tasks'].map(name=>`<p>${name==='tests'?'Тесты':'Задания'}: ${(value[name] || []).map((x,i)=>`${i+1} → ${(x.competencyIndices || []).map(n=>`РО-${n+1}`).join(', ') || 'нет связи'}`).join('; ') || 'не подготовлены'}</p>`).join('')}<h3>Источники</h3>${(value.sources || []).map(x=>`<p><strong>${esc(x.title)}</strong> · ${x.status==='confirmed'?'подтверждён методистом':'не подтверждён'}<br>${esc(x.url)}<br>${esc(x.evidence)}</p>`).join('') || '<p>Источники не подтверждены</p>'}`;
 }
 function showSources() {
-  openDialog('Источники и подтверждения',`<p class="dialog-note">Указывайте только реально проверенные документы и ссылки. Отметка означает вашу проверку; сервис не проверяет существование сайта. Неподтверждённые записи остаются замечаниями и не входят в список литературы DOCX.</p><form id="sources-form"><div id="source-rows">${(course.sources || []).map(sourceEditor).join('')}</div><button type="button" class="text-button" data-action="add-source">Добавить источник</button><p id="sources-error" class="inline-error" role="alert"></p><button class="button primary" type="submit">Сохранить источники</button></form>`);
+  openDialog('Источники и подтверждения',`<p class="dialog-note">Указывайте только реально проверенные документы и ссылки. Отметка означает вашу проверку достоверности. Кнопка «Проверить HTTPS-ссылку» проверяет доступность публичной страницы, без перенаправлений и скачивания текста. Результат временный и не сохраняется в программе. Неподтверждённые записи отмечены в отчёте и отдельном разделе DOCX/PPTX; в проверенную литературу они не включаются.</p><form id="sources-form"><div id="source-rows">${(course.sources || []).map(sourceEditor).join('')}</div><button type="button" class="text-button" data-action="add-source">Добавить источник</button><p id="sources-error" class="inline-error" role="alert"></p><button class="button primary" type="submit">Сохранить источники</button></form>`);
 }
 function sourceEditor(item={}) {
-  return `<fieldset class="source-entry"><legend>Источник</legend><label>Название<input name="title" required maxlength="2000" value="${esc(item.title || '')}"></label><label>Ссылка (для печатного документа можно оставить пустой)<input name="url" type="url" value="${esc(item.url || '')}"></label><label>Кто, когда и по какому первоисточнику проверил<textarea name="evidence" maxlength="2000">${esc(item.evidence || '')}</textarea></label><label><input type="checkbox" name="confirmed" ${item.status==='confirmed'?'checked':''}>Я проверил источник</label><button type="button" class="text-button" data-action="remove-source">Убрать источник</button></fieldset>`;
+  return `<fieldset class="source-entry"><legend>Источник</legend><label>Название<input name="title" required maxlength="2000" value="${esc(item.title || '')}"></label><label>Ссылка (для печатного документа можно оставить пустой)<input name="url" type="url" value="${esc(item.url || '')}"></label><label>Кто, когда и по какому первоисточнику проверил<textarea name="evidence" maxlength="2000">${esc(item.evidence || '')}</textarea></label><button type="button" class="button compact" data-action="check-source">Проверить HTTPS-ссылку</button><p class="source-check-result dialog-note" role="status" aria-live="polite"></p><label><input type="checkbox" name="confirmed" ${item.status==='confirmed'?'checked':''}>Я проверил источник</label><button type="button" class="text-button" data-action="remove-source">Убрать источник</button></fieldset>`;
+}
+
+async function checkSource(entry) {
+  const field=entry.querySelector('[name=url]');
+  const button=entry.querySelector('[data-action=check-source]');
+  const output=entry.querySelector('.source-check-result');
+  const checker=sourceChecks.get(entry) || createSourceCheck();sourceChecks.set(entry,checker);
+  const checkedUrl=field.value.trim();
+  if(!checkedUrl){output.textContent='Укажите публичную HTTPS-ссылку.';field.focus();return;}
+  if(!field.reportValidity())return;
+  button.disabled=true;output.textContent='Проверяю доступность страницы…';
+  const current=()=>entry.isConnected && field.value.trim()===checkedUrl;
+  try {
+    const result=await checker.run(checkedUrl);
+    if(result && current())output.textContent=`${result.httpStatus==null?'':`HTTP ${result.httpStatus}. `}${result.message} Проверено: ${new Date(result.checkedAt).toLocaleString('ru-RU')}.`;
+  } catch(error) {if(current())output.textContent=error.message;}
+  finally {if(entry.isConnected)button.disabled=false;}
 }
 
 function renderChat() {
@@ -168,7 +190,9 @@ function openDialog(title, content, footer = '') {
 function showProposal() {
   if (!proposal) return toast('Нет предложений для подтверждения.');
   const patch=proposal.patch;
-  openDialog('Предлагаемые изменения', `<p class="dialog-note">Ответ модели сохранён как предложение. До подтверждения текущая программа не изменится.</p><p class="inline-error">${proposal.revision!==savedVersion ? 'Предложение относится к старой версии. Подготовьте его заново.' : ''}</p><table class="change-table"><thead><tr><th>Модуль</th><th>Сейчас</th><th>После принятия</th></tr></thead><tbody>${patch.modules.map((m,i)=>`<tr><td>${esc(m.title)}</td><td>${course.modules[i]?.hours ?? '—'} ч</td><td>${m.hours} ч</td></tr>`).join('')}</tbody></table><div class="change-description"><strong>Цель</strong><p>${esc(patch.goal)}</p><strong>Результаты обучения</strong>${patch.competencies.map(value=>`<p>${esc(value)}</p>`).join('')}<p>Тестов: ${patch.tests.length} · заданий: ${patch.tasks.length} · слайдов: ${patch.slides.length}</p>${curriculumSummary(patch)}${patch.modules.filter(m=>m.content).map(m=>`<details><summary>${esc(m.title)} — содержание</summary><p class="preserve-lines">${esc(m.content)}</p></details>`).join('')}<details><summary>Тесты и ключи</summary>${patch.tests.map(t=>`<p>${esc(t.question)}<br>Ответ: ${esc(t.answer)}</p>`).join('')}</details><details><summary>Задания и критерии</summary>${patch.tasks.map(t=>`<p>${esc(t.text)}<br>Критерии: ${esc(t.criteria)}</p>`).join('')}</details><details><summary>Слайды</summary>${patch.slides.map(t=>`<p><strong>${esc(t.title)}</strong><br>${esc(t.body)}</p>`).join('')}</details></div><p class="inline-error" id="proposal-error" role="alert"></p>`, '<button class="button" data-action="reject-proposal">Отклонить</button><button class="button primary" data-action="accept-proposal">Применить пакет</button>');
+  const warnings=proposalWarnings(patch,proposal.stage);
+  const review=`<h3>Проверки предложения</h3>${warnings.length ? `<p class="inline-error">Черновик содержит замечания. Просмотрите их перед применением.</p>${warnings.map(x=>`<p><strong>${esc(x.title)}</strong>${x.details.map(detail=>`<br>${esc(detail)}`).join('')}</p>`).join('')}` : '<p>Автоматические проверки этого этапа пройдены. Содержание проверяет эксперт.</p>'}`;
+  openDialog('Предлагаемые изменения', `<p class="dialog-note">Ответ модели сохранён как предложение. До подтверждения текущая программа не изменится.</p><p class="inline-error">${proposal.revision!==savedVersion ? 'Предложение относится к старой версии. Подготовьте его заново.' : ''}</p><table class="change-table"><thead><tr><th>Модуль</th><th>Сейчас</th><th>После принятия</th></tr></thead><tbody>${patch.modules.map((m,i)=>`<tr><td>${esc(m.title)}</td><td>${course.modules[i]?.hours ?? '—'} ч</td><td>${m.hours} ч</td></tr>`).join('')}</tbody></table>${review}<div class="change-description"><strong>Цель</strong><p>${esc(patch.goal)}</p><strong>Результаты обучения</strong>${patch.competencies.map(value=>`<p>${esc(value)}</p>`).join('')}<p>Тестов: ${patch.tests.length} · заданий: ${patch.tasks.length} · слайдов: ${patch.slides.length}</p>${curriculumSummary(patch)}${patch.modules.filter(m=>m.content).map(m=>`<details><summary>${esc(m.title)} — содержание</summary><p class="preserve-lines">${esc(m.content)}</p></details>`).join('')}<details><summary>Тесты и ключи</summary>${patch.tests.map(t=>`<p>${esc(t.question)}<br>Ответ: ${esc(t.answer)}</p>`).join('')}</details><details><summary>Задания и критерии</summary>${patch.tasks.map(t=>`<p>${esc(t.text)}<br>Критерии: ${esc(t.criteria)}</p>`).join('')}</details><details><summary>Слайды</summary>${patch.slides.map(t=>`<p><strong>${esc(t.title)}</strong><br>${esc(t.body)}</p>`).join('')}</details></div><p class="inline-error" id="proposal-error" role="alert"></p>`, `<button class="button" data-action="reject-proposal">Отклонить</button><button class="button primary" data-action="accept-proposal">${warnings.length?'Применить черновик с замечаниями':'Применить пакет'}</button>`);
 }
 function showExport() {
   openDialog('Экспорт комплекта', `<p class="dialog-note">${esc(course.title)} · ${course.hours} ч · версия ${savedVersion}<br>Скачивается сохранённая версия. Содержание и источники требуют проверки экспертом.</p><div class="export-option">${icon('file')}<div><h3>Данные программы</h3><p>JSON · параметры, материалы и проверки</p></div><button class="button compact" data-action="download-json">Скачать JSON</button></div><div class="export-option">${icon('file')}<div><h3>Программа и материалы</h3><p>DOCX · учебный план, содержание, тесты и задания</p></div><button class="button compact" data-action="download-docx">Скачать DOCX</button></div><div class="export-option">${icon('file')}<div><h3>Текущий материал</h3><p>Печать или сохранение в PDF через браузер</p></div><button class="button compact" data-action="print">Печать / PDF</button></div><div class="export-option"><div><h3>Слайды лекций</h3><p>PPTX · редактируемые слайды и заметки</p></div><button class="button compact" data-action="download-pptx">Скачать PPTX</button></div><div class="export-option"><div><h3>Тесты для LMS</h3><p>Moodle XML · вопросы с открытым ответом и ключи для преподавателя</p></div><button class="button compact" data-action="download-moodle.xml">Скачать Moodle XML</button></div><p class="dialog-note">DOCX содержит разделы выбранного типа программы. Точное соответствие шаблонам АЦР ещё не сверено. Перед использованием нужны проверка содержания, нормативной базы и источников.</p>`);
@@ -186,16 +210,16 @@ function downloadLocalBackup() {
 function showAccess(){openDialog('Доступ команды',`<p class="dialog-note">Демо открыто для просмотра. Пароль команды нужен для создания, изменения программ и платной генерации. Все материалы демо публичны: загружайте только открытые учебные данные.</p><form id="access-form"><label for="team-password">Пароль команды</label><input id="team-password" name="password" type="password" autocomplete="current-password" required maxlength="200"><p id="access-error" class="inline-error" role="alert"></p><button class="button primary" type="submit">Войти</button></form>`);}
 function updateControls() {
   for (const selector of ['[data-action="new-course"]','[data-action="attach"]','#send-button','#generate-skeleton','#generate-materials']) {
-    const element=$(selector);if (element)element.disabled=!writable()||busy||readingReferences;
+    const element=$(selector);if (element)element.disabled=!writable()||busy||generationGuard.active||readingReferences;
   }
-  document.querySelector('[data-action="courses"]').disabled=!initialized||busy||readingReferences;
-  $('#generate-materials').disabled=!writable()||busy||!course.approved;
+  document.querySelector('[data-action="courses"]').disabled=!initialized||busy||generationGuard.active||readingReferences;
+  $('#generate-materials').disabled=!writable()||busy||generationGuard.active||!course.approved;
   $('#approve-button').disabled = !writable()||busy||course.approved||!validate(course).hours.valid||!validate(course).structure.valid||!validate(course).topicHours.valid||!validate(course).competencyMap.valid;
   $('#chat-input').disabled=!writable()||readingReferences;
   $('#access-button').hidden=!requiresLogin;$('#access-button').textContent=authenticated?'Выйти':'Войти команде';
   document.querySelectorAll('[data-action="editor"],[data-view="editor"],[data-action="sources"]').forEach(button=>button.disabled=!writable());
   document.querySelector('[data-action="export"]').disabled=!initialized;
-  const moduleButton=document.querySelector('[data-action="revise-module"]');if(moduleButton)moduleButton.disabled=!writable()||busy||!course.approved||!validate(course).materials.valid;
+  const moduleButton=document.querySelector('[data-action="revise-module"]');if(moduleButton)moduleButton.disabled=!writable()||busy||generationGuard.active||!course.approved||!validate(course).materials.valid;
   for (const field of $('#parameters-form').elements)field.disabled=!writable();
 }
 function updateSaveUI() {
@@ -240,32 +264,46 @@ function proposalMessage() {
 }
 async function pollJob(jobId,token) {
   try {
-    while(token===generationToken) {
-      await new Promise(resolve=>setTimeout(resolve,1000));
-      const record=await request(`/courses/${recordId}`);
-      if(token!==generationToken)return;
-      if(record.job?.id!==jobId)throw new Error('Состояние запуска изменилось. Откройте программу заново.');
-      if(record.job.status==='running')continue;
-      busy=false;proposal=record.proposal;updateControls();renderChecks();
-      if(record.job.status==='failed'){
-        $('#generation-error').textContent=record.job.error;
-        messages.push({role:'assistant',text:record.job.error});
-      }else{proposalMessage();}
-      const summary=runSummary(record.job);if(summary)messages.push({role:'assistant',text:summary});
-      renderChat();return;
-    }
-  }catch(error){busy=false;updateControls();$('#generation-error').textContent=error.message;renderChat();}
+    const record=await waitForJob(recordId,jobId,{
+      isCurrent:()=>token===generationToken,
+      onConnectionChange:error=>{$('#generation-error').textContent=error?'Не удалось получить статус. Восстанавливаю связь с сервером…':'';},
+    });
+    if(!record)return;
+    busy=false;
+    if(!dirty&&!pendingSaves&&!saveError&&record.revision>=savedVersion)applyRecord(record);
+    else proposal=record.proposal;
+    updateControls();renderChecks();
+    if(record.job.status==='failed'){
+      $('#generation-error').innerHTML=`${esc(record.job.error)} <button class="text-button" data-action="reload-saved">Открыть сохранённую версию</button>`;
+      messages.push({role:'assistant',text:record.job.error});
+    }else{proposalMessage();}
+    const summary=runSummary(record.job);if(summary)messages.push({role:'assistant',text:summary});
+    renderChat();
+  }catch(error){if(token!==generationToken)return;busy=false;updateControls();$('#generation-error').innerHTML=`${esc(error.message)} <button class="text-button" data-action="reload-saved">Открыть сохранённую версию и состояние запуска</button>`;renderChat();}
 }
+
 async function startGeneration(stage,prompt='',moduleIndex=null) {
-  if(busy||readingReferences||!guardDirty()||!await flushed())return;
-  if(!$('#parameters-form').reportValidity())return;
-  $('#generation-error').textContent='';$('#chat-error').textContent='';
-  busy=true;updateControls();renderChat();
-  try{
-    const job=await request(`/courses/${recordId}/generate`,{method:'POST',body:{revision:savedVersion,stage,prompt,moduleIndex,requestId:crypto.randomUUID()}});
-    const token=++generationToken;
-    pollJob(job.id,token);
-  }catch(error){busy=false;updateControls();$('#generation-error').textContent=error.message;messages.push({role:'assistant',text:error.message});renderChat();}
+  if(generationGuard.active)return;
+  return generationGuard.run(async()=>{
+    updateControls();
+    if(busy||readingReferences||!guardDirty()||!await flushed())return;
+    const questions=clarificationQuestions(course);
+    if(questions.length){
+      pendingClarification={courseId:recordId,stage,prompt,moduleIndex};
+      messages.push({role:'assistant',text:'Перед генерацией уточним требования:\n'+questions.map(x=>x.question).join('\n')});renderChat();
+      openDialog('Уточним требования к программе',`<form id="clarification-form">${questions.map(x=>`<label>${esc(x.question)}<input name="${x.field}" required maxlength="${x.field==='duration'?80:200}"></label>`).join('')}<p class="dialog-note">Ответы сохранятся в параметрах, затем подготовка продолжится с исходным запросом.</p><p id="clarification-error" class="inline-error" role="alert"></p><button class="button primary" type="submit">Сохранить и продолжить</button></form>`);
+      return;
+    }
+    pendingClarification=null;
+    if(!$('#parameters-form').reportValidity())return;
+    $('#generation-error').textContent='';$('#chat-error').textContent='';
+    busy=true;updateControls();renderChat();
+    try{
+      const job=await request(`/courses/${recordId}/generate`,{method:'POST',body:{revision:savedVersion,stage,prompt,moduleIndex,requestId:crypto.randomUUID()}});
+      const token=++generationToken;
+      pollJob(job.id,token);
+    }catch(error){busy=false;updateControls();$('#generation-error').textContent=error.message;messages.push({role:'assistant',text:error.message});renderChat();}
+  }).finally(updateControls);
 }
 async function showCourses() {
   if(!guardDirty()||!await flushed())return;
@@ -274,30 +312,44 @@ async function showCourses() {
     openDialog('Мои программы',`<p class="dialog-note">Программы хранятся в локальной базе SQLite.</p><div class="course-list">${result.courses.map(record=>`<button class="course-list-item" data-action="open-course" data-id="${esc(record.id)}"><strong>${esc(record.title)}</strong><span>Версия ${record.revision} · ${new Date(record.updatedAt).toLocaleString('ru-RU')}</span>${icon('arrow-right')}</button>`).join('')}</div>`);
   }catch(error){toast(error.message);}
 }
-async function loadCourse(id) {
-  const record=await request(`/courses/${id}`);
-  generationToken++;busy=record.job?.status==='running';tab='program';view='preview';attachments=[];renderAttachments();
-  applyRecord(record);
-  messages=[{role:'assistant',text:course.isDemo?'Открыт демонстрационный пример. Создайте свою программу или измените этот курс.':'Программа загружена из базы. Можно редактировать её, согласовать каркас или запросить изменения.'}];
-  proposalMessage();const summary=runSummary(record.job);if(summary)messages.push({role:'assistant',text:summary});renderChat();
-  $('#generation-error').textContent=record.job?.status==='failed'?record.job.error:'';
-  if(busy)pollJob(record.job.id,generationToken);
+async function loadCourse(id,token=++generationToken) {
+  const wasInitialized=initialized;
+  pendingClarification=null;initialized=false;updateControls();
+  try {
+    const record=await request(`/courses/${id}`);
+    if(token!==generationToken)return;
+    initialized=true;busy=record.job?.status==='running';tab='program';view='preview';attachments=[];renderAttachments();
+    applyRecord(record);
+    messages=[{role:'assistant',text:course.isDemo?'Открыт демонстрационный пример. Создайте свою программу или измените этот курс.':'Программа загружена из базы. Можно редактировать её, согласовать каркас или запросить изменения.'}];
+    proposalMessage();const summary=runSummary(record.job);if(summary)messages.push({role:'assistant',text:summary});renderChat();
+    $('#generation-error').textContent=record.job?.status==='failed'?record.job.error:'';
+    if(busy)pollJob(record.job.id,token);
+  } catch(error) {
+    if(token!==generationToken)return;
+    initialized=wasInitialized;
+    if(initialized&&busy){busy=false;$('#generation-error').innerHTML='Не удалось открыть другую программу. <button class="text-button" data-action="reload-saved">Восстановить состояние текущего запуска</button>';}
+    throw error;
+  } finally {if(token===generationToken)updateControls();}
 }
 async function boot() {
+  const token=++generationToken;
+  pendingClarification=null;initialized=false;updateControls();
   try{
     const status=await request('/status');
+    if(token!==generationToken)return;
     requiresLogin=status.requiresLogin;authenticated=status.authenticated;publicDemo=status.publicDemo;updateControls();
     $('#provider-badge').textContent=status.provider;
     const result=await request('/courses');
+    if(token!==generationToken)return;
     const requestedId=new URL(location.href).searchParams.get('course');
-    initialized=true;
-    if(requestedId||result.courses.length)await loadCourse(requestedId||result.courses[0].id);
+    if(requestedId||result.courses.length)await loadCourse(requestedId||result.courses[0].id,token);
     else {
       const record=await request('/courses',{method:'POST',body:{course}});
-      await loadCourse(record.id);
+      if(token!==generationToken)return;
+      await loadCourse(record.id,token);
     }
-    if(!status.configured)$('#generation-error').textContent='Ключ модели не настроен на сервере. Сохранение и ручной редактор доступны.';
-  }catch(error){initialized=false;$('#document-canvas').innerHTML='<div class="empty-state"><h3>Программа не открыта</h3><p>Проверьте адрес или откройте список программ.</p></div>';$('#project-title').textContent='Программа не открыта';$('#save-error').hidden=false;$('#save-error').innerHTML=`<p>${esc(error.message)}</p><button class="text-button" data-action="retry-boot">Повторить подключение</button><button class="text-button" data-action="reset-route">Открыть список программ</button>`;$('#session-status').textContent='Нет подключения';updateControls();}
+    if(token===generationToken&&!status.configured)$('#generation-error').textContent='Ключ модели не настроен на сервере. Сохранение и ручной редактор доступны.';
+  }catch(error){if(token!==generationToken)return;initialized=false;$('#document-canvas').innerHTML='<div class="empty-state"><h3>Программа не открыта</h3><p>Проверьте адрес или откройте список программ.</p></div>';$('#project-title').textContent='Программа не открыта';$('#save-error').hidden=false;$('#save-error').innerHTML=`<p>${esc(error.message)}</p><button class="text-button" data-action="retry-boot">Повторить подключение</button><button class="text-button" data-action="reset-route">Открыть список программ</button>`;$('#session-status').textContent='Нет подключения';updateControls();}
 }
 
 document.addEventListener('click',async event=>{
@@ -308,7 +360,7 @@ document.addEventListener('click',async event=>{
   const target=event.target.closest('[data-action]');if(!target)return;
   const action=target.dataset.action;
   if(!initialized&&!['retry-boot','reset-route','access'].includes(action))return;
-  const mutations=['new-course','attach','remove-attachment','confirm-references','sources','add-source','remove-source','add-topic','remove-topic','add-module','remove-module','add-entry','remove-entry','approve','generate-skeleton','generate-materials','revise-module','accept-proposal','reject-proposal','editor','program-editor','retry-save'];
+  const mutations=['new-course','attach','remove-attachment','confirm-references','sources','add-source','remove-source','check-source','add-topic','remove-topic','add-module','remove-module','add-entry','remove-entry','approve','generate-skeleton','generate-materials','revise-module','accept-proposal','reject-proposal','editor','program-editor','retry-save'];
   if(mutations.includes(action)&&!writable())return showAccess();
   try{
     if(action==='access'){if(authenticated){if(!guardDirty()||!await flushed())return;await request('/session/logout',{method:'POST',body:{}});authenticated=false;dirty=false;view='preview';renderDocument();updateSaveUI();}else showAccess();}
@@ -335,6 +387,7 @@ document.addEventListener('click',async event=>{
     if(action==='view-reference'){const reference=course.references[Number(target.dataset.index)];openDialog(esc(reference.name),`<p class="preserve-lines">${esc(reference.text)}</p>`);}
     if(action==='confirm-references'){changeCourse({references:[...(course.references || []),...attachments]});attachments=[];renderAttachments();$('#main-dialog').close();if(await flushed())toast('Референсы сохранены и будут учтены моделью.');}
     if(action==='sources'&&guardDirty()&&await flushed())showSources();
+    if(action==='check-source')await checkSource(target.closest('.source-entry'));
     if(action==='add-source')$('#source-rows').insertAdjacentHTML('beforeend',sourceEditor());
     if(action==='remove-source')target.closest('.source-entry').remove();
     if(action==='add-topic'){target.closest('.module-row').querySelector('.topic-rows').insertAdjacentHTML('beforeend',topicEditor());dirty=true;}
@@ -374,7 +427,7 @@ $('#parameters-form').addEventListener('change',event=>{
   changeCourse({[field.name]:value});renderDocument();
   $('#parameter-notice').textContent='Параметры изменены. Проверьте каркас и согласуйте его повторно.';
 });
-document.addEventListener('input',event=>{if(event.target.closest('#editor-form')){dirty=true;$('#document-status').textContent='Есть несохранённые правки';}});
+document.addEventListener('input',event=>{if(event.target.matches('.source-entry [name=url]')){const entry=event.target.closest('.source-entry');sourceChecks.get(entry)?.invalidate();entry.querySelector('.source-check-result').textContent='Ссылка изменена. Запустите проверку заново.';}if(event.target.closest('#editor-form')){dirty=true;$('#document-status').textContent='Есть несохранённые правки';}});
 window.addEventListener('session-expired',()=>{authenticated=false;updateControls();});
 document.addEventListener('submit',async event=>{
   if(event.target.id==='access-form'){event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;try{await request('/session',{method:'POST',body:{password:new FormData(event.target).get('password')}});authenticated=true;$('#main-dialog').close();await boot();}catch(error){$('#access-error').textContent=error.message;button.disabled=false;}return;}
@@ -397,6 +450,17 @@ document.addEventListener('submit',async event=>{
     dirty=false;changeCourse(patch);view='preview';renderDocument();
     if(await flushed())toast('Правки сохранены в SQLite. Каркас проверен.');
   }
+  if(event.target.id==='clarification-form'){
+    event.preventDefault();const patch=Object.fromEntries([...new FormData(event.target)].map(([k,v])=>[k,v.trim()]));
+    if(clarificationQuestions({...course,...patch}).length){$('#clarification-error').textContent='Заполните ответы: можно явно указать отсутствие подготовки.';return;}
+    const button=event.target.querySelector('[type=submit]');button.disabled=true;
+    changeCourse(patch);
+    if(await flushed()){
+      const pending=pendingClarification;pendingClarification=null;
+      $('#main-dialog').close();renderParameters();renderDocument();
+      if(pending?.courseId===recordId)await startGeneration(pending.stage,pending.prompt,pending.moduleIndex);
+    }else{button.disabled=false;$('#clarification-error').textContent='Ответы пока не сохранены. Восстановите связь с сервером и повторите сохранение.';}
+  }
   if(event.target.id==='module-revision-form'){event.preventDefault();const form=new FormData(event.target);$('#main-dialog').close();await startGeneration('module',form.get('prompt').trim(),Number(form.get('moduleIndex')));}
   if(event.target.id==='sources-form'){event.preventDefault();const sources=[...event.target.querySelectorAll('.source-entry')].map(entry=>Object.fromEntries(['title','url','evidence'].map(k=>[k,entry.querySelector(`[name=${k}]`).value.trim()]).concat([['status',entry.querySelector('[name=confirmed]').checked?'confirmed':'unverified']])));if(sources.some(x=>x.status==='confirmed'&&!x.evidence)){$('#sources-error').textContent='Для подтверждения укажите, кто и как проверил источник.';return;}changeCourse({sources});if(await flushed()){$('#main-dialog').close();renderDocument();}}
   if(event.target.id==='new-course-form'){
@@ -407,8 +471,9 @@ document.addEventListener('submit',async event=>{
     }catch(error){$('#new-course-error').textContent=error.message;button.disabled=false;}
   }
 });
+$('#main-dialog').addEventListener('close',()=>{pendingClarification=null;});
 $('#chat-form').addEventListener('submit',async event=>{
-  event.preventDefault();if(busy||!guardDirty())return;
+  event.preventDefault();if(busy||generationGuard.active||!guardDirty())return;
   const input=$('#chat-input');const prompt=input.value.trim();
   if(!prompt){$('#chat-error').textContent='Напишите, что нужно изменить.';input.focus();return;}
   messages.push({role:'user',text:prompt});input.value='';renderChat();
