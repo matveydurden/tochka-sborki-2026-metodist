@@ -8,7 +8,7 @@ export function createCourse(options = {}) {
     references: [], sources: [], competencyMap: [], revision: 0, approved: false, isDemo: !fresh, competencies: fresh ? [] : ['Обрабатывать таблицы с помощью Python и SQL'], tests: [], tasks: [], slides: [], title: options.title || 'Анализ данных на Python',
     type: selectedType, hours: options.hours || 72,
     audience: fresh ? '' : 'Сотрудники банка', level: fresh ? 'не задан' : 'Excel', format: 'Очно-заочно', duration: fresh ? '' : '4 недели', group: 20,
-    assessment: 'Защита проекта',
+    assessment: options.assessment || 'Защита проекта',
     goal: fresh ? '' : 'Анализировать обезличенные банковские данные с помощью Python и SQL.',
     modules: fresh ? [] : [
       { title: 'Основы Python', hours: 10 }, { title: 'Обработка данных в pandas', hours: 20 },

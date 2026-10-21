@@ -88,3 +88,9 @@ test('перед применением материалов видны крат
   assert.ok(warnings.some(x=>x.key==='sources'));
   assert.deepEqual(proposalWarnings(state,'skeleton'),[]);
 });
+
+test('новая программа сохраняет форму аттестации, выбранную методистом',()=>{
+  for(const assessment of ['Тестирование','Практическое задание','Защита проекта']) {
+    assert.equal(createCourse({fresh:true,type:'Общеразвивающая',assessment}).assessment,assessment);
+  }
+});
