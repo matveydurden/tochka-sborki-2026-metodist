@@ -24,6 +24,12 @@ class HTTPTests(unittest.TestCase):
             with urllib.request.urlopen(request) as response:return response.status,json.loads(response.read())
         except urllib.error.HTTPError as error:
             with error:return error.code,json.loads(error.read())
+    def test_program_catalog_is_available_as_json_module_without_exposing_other_files(self):
+        status,catalog=self.call('/assets/program-profiles.json')
+        self.assertEqual(status,200)
+        self.assertIn('Общеразвивающая',catalog['profiles'])
+        self.assertEqual(self.call('/backend/programs.py')[0],404)
+
     def test_create_get_save_and_conflict(self):
         status,record=self.call('/api/courses',{'course':draft()});self.assertEqual(status,201)
         path='/api/courses/'+record['id']

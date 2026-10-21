@@ -48,7 +48,8 @@ def extend(data,course):
         if parsed['status'] not in ['confirmed','unverified']:raise Invalid('Неверный статус источника.')
         if parsed['status']=='confirmed' and not parsed['evidence']:raise Invalid('Укажите, кем и как подтверждён источник.')
         course['sources'].append(parsed)
-    return course
+    from .programs import extend as extend_program
+    return extend_program(data,course)
 
 
 def checks(course):
@@ -110,5 +111,5 @@ def schema(stage,course):
 
 
 def skeleton_identity(course):
-    fields=['title','goal','competencies','competencyMap','references','audience','level','hours','duration','type','format','assessment']
-    return dict(**{k:course.get(k) for k in fields},modules=[{k:m.get(k) for k in ['title','hours','topics']} for m in course['modules']])
+    fields=['title','goal','competencies','references','audience','level','hours','duration','type','format','assessment']
+    return dict(**{k:course.get(k) for k in fields},competencyMap=[{key:item.get(key) for key in ['competencyIndex','knowledge','skills','abilities']} for item in course.get('competencyMap',[])],modules=[{k:m.get(k) for k in ['title','hours','topics']} for m in course['modules']])

@@ -16,7 +16,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
 
     def reply(self,status,value,content_type='application/json; charset=utf-8',filename=None,headers=None):
-        data=dumps(value).encode() if content_type.startswith('application/json') else value
+        data=dumps(value).encode() if content_type.startswith('application/json') and not isinstance(value,bytes) else value
         self.send_response(status)
         self.send_header('Content-Type',content_type)
         self.send_header('Content-Length',str(len(data)))
@@ -109,9 +109,9 @@ class Handler(BaseHTTPRequestHandler):
         if method=='GET' and not path.startswith('/api/'):
             name='index.html' if path=='/' else path.lstrip('/')
             target=(FRONTEND/name).resolve()
-            allowed={'index.html','app.js','api.js','model.js','curriculum.js','styles.css'}
+            allowed={'index.html','app.js','api.js','model.js','curriculum.js','programs.js','styles.css'}
             if target.is_relative_to(FRONTEND) and target.is_file() and (name in allowed or name.startswith('assets/')):
-                types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.ttf':'font/ttf','.txt':'text/plain; charset=utf-8'}
+                types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.ttf':'font/ttf','.txt':'text/plain; charset=utf-8','.json':'application/json; charset=utf-8'}
                 if target.suffix in types:return self.reply(200,target.read_bytes(),types[target.suffix])
         self.reply(404,dict(error='Не найдено.'))
 

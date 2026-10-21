@@ -65,7 +65,7 @@ class TargetedGenerationTests(unittest.TestCase):
         config=service.Config(key='test');seen=[]
         def complete(system,user,schema):
             seen.append(user)
-            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы' for key in schema['properties']}
+            if 'explanation' in schema['properties']:return {key:('Подробное объяснение темы '*34) for key in schema['properties']}
             return dict(content='Новое объяснение',lecturePlan='Новый план',tests=[dict(question='Новый вопрос',answer='Ключ',competencyIndices=[0])]*3,tasks=[dict(text='Новое задание',criteria='Критерии',competencyIndices=[0])],slides=[dict(title='Новый слайд',body='Текст',competencyIndices=[0])]*4)
         config._complete=complete
         import json
@@ -150,7 +150,7 @@ class ContentGenerationTests(unittest.TestCase):
         def complete(system,user,schema):
             calls.append((user,schema))
             if 'explanation' in schema['properties']:
-                return {key:'Подробный учебный текст с примером' for key in schema['properties']}
+                return {key:('Подробный учебный текст с примером '*24) for key in schema['properties']}
             self.assertIn('Подробный учебный текст с примером',user.get('teachingText',''))
             self.assertIn('Разобранный пример',user['teachingText'])
             return dict(lecturePlan='План',tests=[dict(question='Вопрос',answer='Ключ',competencyIndices=[0])]*3,tasks=[dict(text='Задание',criteria='Критерии',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст',competencyIndices=[0])]*4)
@@ -162,7 +162,7 @@ class ContentGenerationTests(unittest.TestCase):
         calls=[]
         def complete(system,user,schema):
             calls.append(schema)
-            if 'explanation' in schema['properties']:return {key:'Объяснение' for key in schema['properties']}
+            if 'explanation' in schema['properties']:return {key:('Объяснение '*100) for key in schema['properties']}
             self.assertEqual(schema['properties']['slides']['items']['properties']['title']['maxLength'],160)
             return dict(lecturePlan='План',tests=[dict(question='Вопрос',answer='Ключ',competencyIndices=[0])]*3,tasks=[dict(text='Задание',criteria='Критерии',competencyIndices=[0])],slides=[dict(title='Я'*161,body='Текст',competencyIndices=[0])]*4)
         with self.assertRaisesRegex(service.Invalid,'Модуль 1.*title'):
@@ -184,7 +184,7 @@ class MaterialCountTests(unittest.TestCase):
     def test_generator_rejects_package_below_question_or_slide_minimum(self):
         for count_tests,count_slides in [(2,4),(3,3)]:
             def complete(system,user,schema):
-                if 'explanation' in schema['properties']:return {key:'Объяснение' for key in schema['properties']}
+                if 'explanation' in schema['properties']:return {key:('Объяснение '*100) for key in schema['properties']}
                 return dict(lecturePlan='План',tests=[dict(question='Вопрос',answer='Ключ',competencyIndices=[0])]*count_tests,tasks=[dict(text='Задание',criteria='Критерии',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст',competencyIndices=[0])]*count_slides)
             with self.subTest(tests=count_tests,slides=count_slides),self.assertRaises(service.Invalid):
                 service.Config().material_bundle(service.normalize(curriculum()),'',complete)

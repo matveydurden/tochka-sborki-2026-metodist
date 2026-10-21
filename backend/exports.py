@@ -3,9 +3,10 @@ import io
 import textwrap
 from xml.etree import ElementTree as ET
 from .curriculum import HOUR_FIELDS
+from .programs import profile, normative_entries, CATALOG, DETAIL_FIELDS
 
 
-CHECK_LABELS={'materialCounts':'Количество оценочных материалов и слайдов','contentDepth':'Объём учебного текста (не предметная экспертиза)','hours':'Сумма часов','structure':'Полнота каркаса','materials':'Полнота материалов','topicHours':'Часы тем и видов работы','competencyMap':'Карта компетенций','coverage':'Покрытие темами, тестами и заданиями','lecturePlans':'Планы лекций','sources':'Подтверждение источников методистом'}
+CHECK_LABELS={'programSections':'Полнота разделов программы','professionalStandards':'Профстандарты и трудовые функции','normativeBasis':'Нормативные основания','materialCounts':'Количество оценочных материалов и слайдов','contentDepth':'Объём учебного текста (не предметная экспертиза)','hours':'Сумма часов','structure':'Полнота каркаса','materials':'Полнота материалов','topicHours':'Часы тем и видов работы','competencyMap':'Карта компетенций','coverage':'Покрытие темами, тестами и заданиями','lecturePlans':'Планы лекций','sources':'Подтверждение источников методистом'}
 
 def source_line(item):
     status='ПОДТВЕРЖДЁН МЕТОДИСТОМ' if item['status']=='confirmed' else 'НЕ ПОДТВЕРЖДЁН — требуется проверка'
@@ -26,7 +27,7 @@ def docx(course):
     section=document.sections[0];section.page_width=Cm(21);section.page_height=Cm(29.7);section.top_margin=Cm(2);section.bottom_margin=Cm(2);section.left_margin=Cm(2);section.right_margin=Cm(1.5)
     style=document.styles['Normal'];style.font.name='Arial';style.font.size=Pt(10)
     general=course['type']=='Общеразвивающая'
-    document.add_heading('Дополнительная общеразвивающая программа' if general else 'Дополнительная профессиональная программа повышения квалификации',0)
+    document.add_heading(profile(course)['heading'],0)
     document.add_heading(course['title'],1)
     if course['type']=='Стажировка':document.add_paragraph('Стажировка оформляется как программа повышения квалификации.')
     document.add_paragraph('ЧЕРНОВИК. Утверждает руководитель после проверки методистом и предметным экспертом.')
@@ -39,15 +40,22 @@ def docx(course):
     document.add_paragraph(f"Тип: {course['type']}. Объём: {course['hours']} ч. Форма: {course['format']}. Срок: {course['duration']}.")
     document.add_paragraph(f"Аудитория: {course['audience']}. Входной уровень: {course['level']}.")
     heading('Цель программы',course['goal'])
+    for key,label in DETAIL_FIELDS.items():heading(label,course.get('programDetails',{}).get(key) or 'НЕ ЗАПОЛНЕНО — требуется решение методиста.')
     if general:document.add_paragraph('Планируемый документ об обучении: ____________________.')
     else:document.add_paragraph('Требования к образованию поступающих, документ о квалификации, действующий профстандарт и коды трудовых функций: заполняет методист после проверки первоисточников.')
     heading('Нормативные основания')
-    document.add_paragraph('Действующую редакцию нормативных оснований проверяет методист. Неподтверждённые номера приказов и профстандартов не включаются как установленные факты.')
+    document.add_paragraph(f"Профиль: {profile(course)['id']}. Каталог оснований сверен {CATALOG['checkedAt']}. Это выбор применимого набора документов, а не заключение о юридическом соответствии.")
+    for item in normative_entries(course):document.add_paragraph(source_line(item))
+    document.add_paragraph(profile(course)['notice'])
+    document.add_paragraph('Полнота оформления программы: календарные даты, условия обучения, реквизиты организации и утверждения заполняет методист. Точное оформление АЦР не сверено: официальные образцы недоступны.')
+    document.add_paragraph('Документ по итогам: '+profile(course)['document'])
     heading('2. Результаты обучения')
     for i,value in enumerate(course['competencies']):document.add_paragraph(f'РО-{i+1}. {value}')
     heading('Карта компетенций')
     for item in course.get('competencyMap',[]):
         document.add_heading(f"РО-{item['competencyIndex']+1}",2)
+        standard=item.get('professionalStandard',{})
+        document.add_paragraph('Профстандарт / трудовая функция: '+(' | '.join(str(standard.get(k,'')) for k in ['title','code','functionCode','url','status','evidence']) if standard else 'НЕ ПОДТВЕРЖДЕНО'))
         for key,label in [('knowledge','Знания'),('skills','Умения'),('abilities','Навыки')]:document.add_paragraph(label+': '+'; '.join(item[key]))
         for mi,module in enumerate(course['modules']):
             for ti,topic in enumerate(module.get('topics',[])):
@@ -116,6 +124,9 @@ def pptx(course):
     from .service import Invalid
     if not course['slides']:raise Invalid('Слайды ещё не подготовлены.')
     exported_slides=list(course['slides'])
+    exported_slides.extend(dict(title=label,body=course.get('programDetails',{}).get(key) or 'НЕ ЗАПОЛНЕНО — требуется решение методиста.',moduleIndex=0,appendix=True) for key,label in DETAIL_FIELDS.items())
+    exported_slides.extend(dict(title='Нормативные основания',body=source_line(item),moduleIndex=0,appendix=True) for item in normative_entries(course))
+    exported_slides.append(dict(title='Тип программы и ограничения',body=profile(course)['heading']+'\n'+profile(course)['notice']+'\nТочное оформление АЦР не сверено; реквизиты и полноту проверяет методист.',moduleIndex=0,appendix=True))
     source_lines=[source_line(item) for item in course.get('sources',[])] or ['Источники не добавлены. Литература требует проверки методистом.']
     exported_slides.extend(dict(title='Источники и статус проверки',body=line,moduleIndex=0,appendix=True) for line in source_lines)
     from .service import checks

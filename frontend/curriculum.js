@@ -35,5 +35,5 @@ export function curriculumChecks(course) {
 export function preserveModule(original,patch) { return {...original,...patch}; }
 
 export function skeletonIdentity(course) {
-  return {...Object.fromEntries(['title','goal','competencies','competencyMap','references','audience','level','hours','duration','type','format','assessment'].map(k=>[k,course[k]])),modules:course.modules.map(m=>({title:m.title,hours:m.hours,topics:m.topics}))};
+  return {...Object.fromEntries(['title','goal','competencies','references','audience','level','hours','duration','type','format','assessment'].map(k=>[k,course[k]])),competencyMap:(course.competencyMap || []).map(item=>Object.fromEntries(['competencyIndex','knowledge','skills','abilities'].map(key=>[key,item[key]]))),modules:course.modules.map(m=>({title:m.title,hours:m.hours,topics:m.topics}))};
 }

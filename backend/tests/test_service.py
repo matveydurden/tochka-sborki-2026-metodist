@@ -178,7 +178,7 @@ class ServiceTests(unittest.TestCase):
         seen=[]
         def complete(system,user,schema):
             seen.append(user)
-            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы' for key in schema['properties']}
+            if 'explanation' in schema['properties']:return {key:('Подробное объяснение темы '*34) for key in schema['properties']}
             return dict(content='Подробное объяснение темы',lecturePlan='План лекции',tests=[dict(question='Вопрос',answer='Ответ',competencyIndices=[0])]*3,tasks=[dict(text='Задание',criteria='Критерий',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст слайда',competencyIndices=[0])]*4)
         result=cfg.material_bundle(course,'Практический курс',complete)
         patch=service.proposal_patch('materials',course,result)
