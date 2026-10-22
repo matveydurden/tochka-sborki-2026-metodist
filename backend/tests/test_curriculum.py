@@ -1,6 +1,7 @@
 import copy
 import unittest
 from backend import service
+from test_service import assessment_response
 from test_service import draft, skeleton
 
 
@@ -49,6 +50,95 @@ class CurriculumTests(unittest.TestCase):
         with self.assertRaises(service.Invalid):service.normalize(course)
 
 class GenerationContractTests(unittest.TestCase):
+    def test_answer_lines_preserve_executable_code_and_indentation(self):
+        import ast
+        source="import csv\ntry:\n    print('Готово')\nexcept OSError:\n    print('Ошибка')"
+        def complete(system,user,schema):
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+            result=assessment_response(user)
+            for block in result['assessments'].values():
+                block['tests']=[dict(question='Как обработать ошибку?',answerLines=source.split('\n'))]*3
+            return result
+        result=service.Config().material_bundle(service.normalize(curriculum()),'',complete)
+        self.assertEqual(result['tests'][0]['answer'],source)
+        ast.parse(result['tests'][0]['answer'])
+
+    def test_invalid_answer_lines_are_rejected_before_generating_next_module(self):
+        for lines in [None,[],[None],['x']*81,['x'*3001],['x'*2000]*2]:
+            calls=[]
+            def complete(system,user,schema):
+                calls.append(user)
+                if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+                result=assessment_response(user)
+                next(iter(result['assessments'].values()))['tests'][0]['answerLines']=lines
+                return result
+            with self.subTest(lines_type=type(lines).__name__,count=len(lines or [])),self.assertRaises(service.Invalid):
+                service.Config().material_bundle(service.normalize(curriculum()),'',complete)
+            self.assertEqual(len(calls),2)
+
+    def test_large_bundle_respects_course_wide_limits_before_acceptance(self):
+        course=service.normalize(curriculum())
+        course['modules']=[copy.deepcopy(course['modules'][0]) for _ in range(25)]
+        course['competencies']=[f'Результат {i}' for i in range(20)]
+        for module in course['modules']:module['topics'][0]['competencyIndices']=list(range(20))
+        def complete(system,user,schema):
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+            blocks=schema['properties']['assessments']['properties']
+            result=assessment_response(user,test_count=1,slide_count=schema['properties']['slides']['maxItems'])
+            for key,block in blocks.items():
+                for name in ['tests','tasks']:
+                    result['assessments'][key][name]*=block['properties'][name]['maxItems']
+            return result
+        result=service.Config().material_bundle(course,'',complete)
+        for name,limit in [('tests',200),('tasks',100),('slides',100)]:
+            self.assertLessEqual(len(result[name]),limit,name)
+        service.normalize(dict(course,**result))
+
+    def test_impossible_bundle_is_rejected_without_a_paid_call(self):
+        from unittest.mock import Mock
+        course=service.normalize(curriculum())
+        course['modules']=[copy.deepcopy(course['modules'][0]) for _ in range(26)]
+        complete=Mock()
+        with self.assertRaisesRegex(service.Invalid,'лимит'):
+            service.Config().material_bundle(course,'',complete)
+        complete.assert_not_called()
+
+    def test_assessment_slots_bind_nonzero_outcomes_without_model_numbering(self):
+        # ERR-08: the schema, rather than an arbitrary model index, binds each task.
+        course=service.normalize(dict(curriculum(),competencies=['Первый','Второй','Третий','Четвёртый']))
+        for module in course['modules']:module['topics'][0]['competencyIndices']=[1,3]
+        def complete(system,user,schema):
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+            return dict(lecturePlan='План',assessments={f'outcome_{i}':dict(tests=[dict(question='Вопрос',answerLines=['Ключ'])]*2,tasks=[dict(text='Задание',criteria='Критерий')]) for i in [1,3]},slides=[dict(title='Слайд',body='Текст',competencyIndices=[1,3])]*4)
+        result=service.Config().material_bundle(course,'',complete)
+        for module_index in [0,1]:
+            for key in ['tests','tasks']:
+                links=[x['competencyIndices'] for x in result[key] if x['moduleIndex']==module_index]
+                self.assertEqual({i for entry in links for i in entry},{1,3})
+                self.assertTrue(all(len(entry)==1 for entry in links))
+
+    def test_missing_assessment_block_is_rejected_before_the_next_module(self):
+        calls=[]
+        def complete(system,user,schema):
+            calls.append(user)
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+            return dict(assessment_response(user),assessments={})
+        with self.assertRaisesRegex(service.Invalid,'блоки проверки результатов'):
+            service.Config().material_bundle(service.normalize(curriculum()),'',complete)
+        self.assertEqual(len(calls),2)
+
+    def test_twenty_outcomes_fit_the_existing_task_limit(self):
+        course=service.normalize(dict(curriculum(),competencies=[f'Результат {i}' for i in range(20)]))
+        for module in course['modules']:module['topics'][0]['competencyIndices']=list(range(20))
+        def complete(system,user,schema):
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+            return assessment_response(user,test_count=1)
+        result=service.Config().material_bundle(course,'',complete)
+        for module_index in [0,1]:
+            tasks=[entry for entry in result['tasks'] if entry['moduleIndex']==module_index]
+            self.assertEqual(len(tasks),10)
+            self.assertEqual({i for entry in tasks for i in entry['competencyIndices']},set(range(20)))
+
     def test_generated_skeleton_cannot_omit_traceability(self):
         with self.assertRaises(service.Invalid):service.proposal_patch('skeleton',service.normalize(draft()),{k:v for k,v in skeleton().items() if k!='competencyMap'})
 
@@ -58,7 +148,74 @@ class GenerationContractTests(unittest.TestCase):
         broken=materials();broken['modules'][0]['topics']=[]
         with self.assertRaises(service.Invalid):service.proposal_patch('materials',course,broken)
 
+    def test_incomplete_coverage_names_the_module_and_outcome_in_the_failure(self):
+        # ERR-08: a safe rejection must tell the methodist what needs correction.
+        from test_service import materials
+        course=service.normalize(curriculum());course['approved']=True
+        broken=materials();broken['tests'][1]['competencyIndices']=[]
+        with self.assertRaises(service.Invalid) as caught:service.proposal_patch('materials',course,broken)
+        self.assertIn('Модуль 2',str(caught.exception))
+        self.assertIn('РО-1',str(caught.exception))
+        self.assertIn('тест',str(caught.exception))
+
+    def test_module_generation_receives_explicit_global_outcome_indices(self):
+        # ERR-08: local module numbering must not hide non-contiguous global IDs.
+        course=service.normalize(dict(curriculum(),competencies=['Первый','Второй','Третий','Четвёртый']))
+        course['modules'][0]['topics'][0]['competencyIndices']=[0,2]
+        course['modules'][1]['topics'][0]['competencyIndices']=[1,3]
+        required=[]
+        def complete(system,user,schema):
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+            expected=user.get('requiredOutcomes',[]);required.append(expected)
+            return assessment_response(user,lecture_plan='План лекции')
+        service.Config(key='test').material_bundle(course,'',complete)
+        self.assertEqual(required,[[dict(competencyIndex=0,title='Первый'),dict(competencyIndex=2,title='Третий')],[dict(competencyIndex=1,title='Второй'),dict(competencyIndex=3,title='Четвёртый')]])
+
 class TargetedGenerationTests(unittest.TestCase):
+    def test_targeted_module_keeps_global_links_and_reports_original_number(self):
+        import json
+        course=service.normalize(dict(curriculum(),competencies=['Первый','Второй','Третий','Четвёртый']))
+        course['modules'][1]['topics'][0]['competencyIndices']=[1,3]
+        config=service.Config(key='test')
+        def complete(system,user,schema):
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+            return assessment_response(user,test_count=2)
+        config._complete=complete
+        result=config.generate('module',course,json.dumps(dict(moduleIndex=1,prompt='')))
+        for name in ['tests','tasks']:
+            self.assertEqual({i for x in result[name] for i in x['competencyIndices']},{1,3})
+            self.assertTrue(all(x['moduleIndex']==1 for x in result[name]))
+        config._complete=lambda *args:{}
+        with self.assertRaisesRegex(service.Invalid,'Модуль 2'):
+            config.generate('module',course,json.dumps(dict(moduleIndex=1,prompt='')))
+
+    def test_targeted_module_checks_retained_material_limits_before_calling(self):
+        import json
+        from unittest.mock import Mock
+        course=service.normalize(curriculum())
+        course['slides']=[dict(title='Слайд',body='Текст',competencyIndices=[0],moduleIndex=0)]*98
+        config=service.Config(key='test');config._complete=Mock()
+        with self.assertRaisesRegex(service.Invalid,'лимит'):
+            config.generate('module',course,json.dumps(dict(moduleIndex=1,prompt='')))
+        config._complete.assert_not_called()
+
+    def test_targeted_module_fits_exact_remaining_test_budget(self):
+        import json
+        course=service.normalize(dict(curriculum(),competencies=['Первый','Второй']))
+        course['modules'][1]['topics'][0]['competencyIndices']=[0,1]
+        course['tests']=[dict(question='Вопрос',answer='Ключ',competencyIndices=[0],moduleIndex=0)]*197
+        config=service.Config(key='test')
+        def complete(system,user,schema):
+            if 'explanation' in schema['properties']:return {key:'Подробное объяснение темы '*34 for key in schema['properties']}
+            for block in schema['properties']['assessments']['properties'].values():
+                tests=block['properties']['tests']
+                self.assertLessEqual(tests['minItems'],tests['maxItems'])
+            return assessment_response(user)
+        config._complete=complete
+        result=config.generate('module',course,json.dumps(dict(moduleIndex=1,prompt='')))
+        self.assertEqual(len(result['tests']),200)
+        service.normalize(dict(course,**result))
+
     def test_only_requested_module_is_regenerated(self):
         from test_service import materials
         course=service.normalize(dict(curriculum(),**materials()));course['approved']=True
@@ -66,7 +223,7 @@ class TargetedGenerationTests(unittest.TestCase):
         def complete(system,user,schema):
             seen.append(user)
             if 'explanation' in schema['properties']:return {key:('Подробное объяснение темы '*34) for key in schema['properties']}
-            return dict(content='Новое объяснение',lecturePlan='Новый план',tests=[dict(question='Новый вопрос',answer='Ключ',competencyIndices=[0])]*3,tasks=[dict(text='Новое задание',criteria='Критерии',competencyIndices=[0])],slides=[dict(title='Новый слайд',body='Текст',competencyIndices=[0])]*4)
+            return assessment_response(user,lecture_plan='Новый план',question='Новый вопрос',task_text='Новое задание',slide_title='Новый слайд')
         config._complete=complete
         import json
         result=config.generate('module',course,json.dumps(dict(moduleIndex=1,prompt='Усложни')))
@@ -153,7 +310,7 @@ class ContentGenerationTests(unittest.TestCase):
                 return {key:('Подробный учебный текст с примером '*24) for key in schema['properties']}
             self.assertIn('Подробный учебный текст с примером',user.get('teachingText',''))
             self.assertIn('Разобранный пример',user['teachingText'])
-            return dict(lecturePlan='План',tests=[dict(question='Вопрос',answer='Ключ',competencyIndices=[0])]*3,tasks=[dict(text='Задание',criteria='Критерии',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст',competencyIndices=[0])]*4)
+            return assessment_response(user)
         result=service.Config().material_bundle(course,'',complete)
         self.assertIn('Подробный учебный текст с примером',result['modules'][0]['content'])
         self.assertEqual(len(calls),2)
@@ -164,7 +321,7 @@ class ContentGenerationTests(unittest.TestCase):
             calls.append(schema)
             if 'explanation' in schema['properties']:return {key:('Объяснение '*100) for key in schema['properties']}
             self.assertEqual(schema['properties']['slides']['items']['properties']['title']['maxLength'],160)
-            return dict(lecturePlan='План',tests=[dict(question='Вопрос',answer='Ключ',competencyIndices=[0])]*3,tasks=[dict(text='Задание',criteria='Критерии',competencyIndices=[0])],slides=[dict(title='Я'*161,body='Текст',competencyIndices=[0])]*4)
+            return assessment_response(user,slide_title='Я'*161)
         with self.assertRaisesRegex(service.Invalid,'Модуль 1.*title'):
             service.Config().material_bundle(service.normalize(curriculum()),'',complete)
         self.assertEqual(len(calls),2)
@@ -185,7 +342,7 @@ class MaterialCountTests(unittest.TestCase):
         for count_tests,count_slides in [(2,4),(3,3)]:
             def complete(system,user,schema):
                 if 'explanation' in schema['properties']:return {key:('Объяснение '*100) for key in schema['properties']}
-                return dict(lecturePlan='План',tests=[dict(question='Вопрос',answer='Ключ',competencyIndices=[0])]*count_tests,tasks=[dict(text='Задание',criteria='Критерии',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст',competencyIndices=[0])]*count_slides)
+                return assessment_response(user,test_count=count_tests,slide_count=count_slides)
             with self.subTest(tests=count_tests,slides=count_slides),self.assertRaises(service.Invalid):
                 service.Config().material_bundle(service.normalize(curriculum()),'',complete)
 

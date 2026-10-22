@@ -1,5 +1,5 @@
 import { createCourse, validate, updateCourse, clarificationQuestions, proposalWarnings } from './model.js';
-import { request, createSourceCheck, createGenerationGuard, waitForJob } from './api.js';
+import { request, createSourceCheck, createGenerationGuard, createGenerationSubmission, waitForJob } from './api.js';
 import {hourFields,hourLabels,preserveModule} from './curriculum.js';
 import {programProfile,inferProgramType,normativeEntries,suggestedNormativeSources,catalogDate,detailFields} from './programs.js';
 
@@ -24,11 +24,13 @@ const esc = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<'
 const decorate = (root = document) => root.querySelectorAll('[data-icon]').forEach(node => { node.innerHTML = icon(node.dataset.icon); });
 const sourceChecks=new WeakMap();
 const generationGuard=createGenerationGuard();
+const generationSubmission=createGenerationSubmission();
 let course = createCourse();
 let tab = 'program';
 let view = 'preview';
 let zoom = 100;
 let busy = false;
+let pausedJob=null;
 let dirty = false;
 let sessionChanged = false;
 let proposal = null;
@@ -217,17 +219,19 @@ function downloadLocalBackup() {
 }
 function showAccess(){openDialog('Доступ команды',`<p class="dialog-note">Демо открыто для просмотра. Пароль команды нужен для создания, изменения программ и платной генерации. Все материалы демо публичны: загружайте только открытые учебные данные.</p><form id="access-form"><label for="team-password">Пароль команды</label><input id="team-password" name="password" type="password" autocomplete="current-password" required maxlength="200"><p id="access-error" class="inline-error" role="alert"></p><button class="button primary" type="submit">Войти</button></form>`);}
 function updateControls() {
+  const uncertain=pausedJob?.courseId===recordId||generationSubmission.has(recordId);
   for (const selector of ['[data-action="new-course"]','[data-action="attach"]','#send-button','#generate-skeleton','#generate-materials']) {
     const element=$(selector);if (element)element.disabled=!writable()||busy||generationGuard.active||readingReferences;
   }
   document.querySelector('[data-action="courses"]').disabled=!initialized||busy||generationGuard.active||readingReferences;
-  $('#generate-materials').disabled=!writable()||busy||generationGuard.active||!course.approved;
+  for(const selector of ['#send-button','#generate-skeleton'])$(selector).disabled||=uncertain;
+  $('#generate-materials').disabled=!writable()||busy||generationGuard.active||uncertain||!course.approved;
   $('#approve-button').disabled = !writable()||busy||course.approved||!validate(course).hours.valid||!validate(course).structure.valid||!validate(course).topicHours.valid||!validate(course).competencyMap.valid;
   $('#chat-input').disabled=!writable()||readingReferences;
   $('#access-button').hidden=!requiresLogin;$('#access-button').textContent=authenticated?'Выйти':'Войти команде';
   document.querySelectorAll('[data-action="editor"],[data-view="editor"],[data-action="sources"]').forEach(button=>button.disabled=!writable());
   document.querySelector('[data-action="export"]').disabled=!initialized;
-  const moduleButton=document.querySelector('[data-action="revise-module"]');if(moduleButton)moduleButton.disabled=!writable()||busy||generationGuard.active||!course.approved||!validate(course).materials.valid;
+  const moduleButton=document.querySelector('[data-action="revise-module"]');if(moduleButton)moduleButton.disabled=!writable()||busy||generationGuard.active||uncertain||!course.approved||!validate(course).materials.valid;
   for (const field of $('#parameters-form').elements)field.disabled=!writable();
 }
 function updateSaveUI() {
@@ -277,7 +281,7 @@ async function pollJob(jobId,token) {
       onConnectionChange:error=>{$('#generation-error').textContent=error?'Не удалось получить статус. Восстанавливаю связь с сервером…':'';},
     });
     if(!record)return;
-    busy=false;
+    busy=false;pausedJob=null;
     if(!dirty&&!pendingSaves&&!saveError&&record.revision>=savedVersion)applyRecord(record);
     else proposal=record.proposal;
     updateControls();renderChecks();
@@ -287,15 +291,25 @@ async function pollJob(jobId,token) {
     }else{proposalMessage();}
     const summary=runSummary(record.job);if(summary)messages.push({role:'assistant',text:summary});
     renderChat();
-  }catch(error){if(token!==generationToken)return;busy=false;updateControls();$('#generation-error').innerHTML=`${esc(error.message)} <button class="text-button" data-action="reload-saved">Открыть сохранённую версию и состояние запуска</button>`;renderChat();}
+  }catch(error){
+    if(token!==generationToken)return;
+    busy=false;
+    pausedJob=error.status===0||error.status>=500?{courseId:recordId,jobId}:null;
+    updateControls();
+    $('#generation-error').innerHTML=`${esc(error.message)} ${pausedJob?'<button class="text-button" data-action="resume-job">Проверить состояние запуска</button>':'<button class="text-button" data-action="reload-saved">Открыть сохранённую версию и состояние запуска</button>'}`;
+    renderChat();
+  }
 }
 
 async function startGeneration(stage,prompt='',moduleIndex=null) {
   if(generationGuard.active)return;
+  if(pausedJob?.courseId===recordId){toast('Сначала проверьте состояние предыдущего запуска.');return;}
+  const recovering=generationSubmission.has(recordId);
+  if(recovering&&stage){toast('Сначала восстановите подтверждение предыдущего запуска.');return;}
   return generationGuard.run(async()=>{
     updateControls();
-    if(busy||readingReferences||!guardDirty()||!await flushed())return;
-    const questions=clarificationQuestions(course);
+    if(busy||readingReferences||(!recovering&&(!guardDirty()||!await flushed())))return;
+    const questions=recovering?[]:clarificationQuestions(course);
     if(questions.length){
       pendingClarification={courseId:recordId,stage,prompt,moduleIndex};
       messages.push({role:'assistant',text:'Перед генерацией уточним требования:\n'+questions.map(x=>x.question).join('\n')});renderChat();
@@ -303,14 +317,20 @@ async function startGeneration(stage,prompt='',moduleIndex=null) {
       return;
     }
     pendingClarification=null;
-    if(!$('#parameters-form').reportValidity())return;
+    if(!recovering&&!$('#parameters-form').reportValidity())return;
     $('#generation-error').textContent='';$('#chat-error').textContent='';
     busy=true;updateControls();renderChat();
+    const token=++generationToken;const id=recordId;
     try{
-      const job=await request(`/courses/${recordId}/generate`,{method:'POST',body:{revision:savedVersion,stage,prompt,moduleIndex,requestId:crypto.randomUUID()}});
-      const token=++generationToken;
+      const job=await generationSubmission.run(id,{revision:savedVersion,stage,prompt,moduleIndex,requestId:crypto.randomUUID()});
+      if(token!==generationToken||id!==recordId)return;
       pollJob(job.id,token);
-    }catch(error){busy=false;updateControls();$('#generation-error').textContent=error.message;messages.push({role:'assistant',text:error.message});renderChat();}
+    }catch(error){
+      if(token!==generationToken||id!==recordId)return;
+      busy=false;updateControls();
+      $('#generation-error').innerHTML=`${esc(error.message)}${generationSubmission.has(id)?' Перед новым запуском проверьте состояние прежнего. <button class="text-button" data-action="retry-generation">Восстановить подтверждение запуска</button>':''}`;
+      messages.push({role:'assistant',text:error.message});renderChat();
+    }
   }).finally(updateControls);
 }
 async function showCourses() {
@@ -326,6 +346,7 @@ async function loadCourse(id,token=++generationToken) {
   try {
     const record=await request(`/courses/${id}`);
     if(token!==generationToken)return;
+    pausedJob=null;generationSubmission.clear(id);
     initialized=true;busy=record.job?.status==='running';tab='program';view='preview';attachments=[];renderAttachments();
     applyRecord(record);
     messages=[{role:'assistant',text:course.isDemo?'Открыт демонстрационный пример. Создайте свою программу или измените этот курс.':'Программа загружена из базы. Можно редактировать её, согласовать каркас или запросить изменения.'}];
@@ -368,7 +389,7 @@ document.addEventListener('click',async event=>{
   const target=event.target.closest('[data-action]');if(!target)return;
   const action=target.dataset.action;
   if(!initialized&&!['retry-boot','reset-route','access'].includes(action))return;
-  const mutations=['add-normative-sources','new-course','attach','remove-attachment','confirm-references','sources','add-source','remove-source','check-source','add-topic','remove-topic','add-module','remove-module','add-entry','remove-entry','approve','generate-skeleton','generate-materials','revise-module','accept-proposal','reject-proposal','editor','program-editor','retry-save'];
+  const mutations=['add-normative-sources','new-course','attach','remove-attachment','confirm-references','sources','add-source','remove-source','check-source','add-topic','remove-topic','add-module','remove-module','add-entry','remove-entry','approve','generate-skeleton','generate-materials','retry-generation','revise-module','accept-proposal','reject-proposal','editor','program-editor','retry-save'];
   if(mutations.includes(action)&&!writable())return showAccess();
   try{
     if(action==='access'){if(authenticated){if(!guardDirty()||!await flushed())return;await request('/session/logout',{method:'POST',body:{}});authenticated=false;dirty=false;view='preview';renderDocument();updateSaveUI();}else showAccess();}
@@ -411,6 +432,12 @@ document.addEventListener('click',async event=>{
     }
     if(action==='generate-skeleton')await startGeneration('skeleton',$('#chat-input').value.trim());
     if(action==='generate-materials')await startGeneration('materials');
+    if(action==='retry-generation'&&generationSubmission.has(recordId))await startGeneration();
+    if(action==='resume-job'&&pausedJob?.courseId===recordId){
+      const jobId=pausedJob.jobId;pausedJob=null;busy=true;updateControls();
+      $('#generation-error').textContent='Проверяю состояние прежнего запуска…';
+      pollJob(jobId,++generationToken);
+    }
     if(action==='reject-proposal'){
       target.disabled=true;await request(`/proposals/${proposal.id}/reject`,{method:'POST',body:{}});proposal=null;$('#main-dialog').close();messages.push({role:'assistant',text:'Предложение отклонено. Программа не изменена.'});renderChat();
     }
@@ -439,7 +466,17 @@ $('#parameters-form').addEventListener('change',event=>{
 document.addEventListener('input',event=>{if(event.target.id==='new-request'){const type=inferProgramType(event.target.value);$('#type-inference').textContent=type ? `Определён тип: ${type}. Можно изменить его вручную.` : 'Тип не определён однозначно. Уточните запрос или выберите тип вручную.';}if(event.target.matches('.source-entry [name=url]')){const entry=event.target.closest('.source-entry');sourceChecks.get(entry)?.invalidate();entry.querySelector('.source-check-result').textContent='Ссылка изменена. Запустите проверку заново.';}if(event.target.closest('#editor-form')){dirty=true;$('#document-status').textContent='Есть несохранённые правки';}});
 window.addEventListener('session-expired',()=>{authenticated=false;updateControls();});
 document.addEventListener('submit',async event=>{
-  if(event.target.id==='access-form'){event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;try{await request('/session',{method:'POST',body:{password:new FormData(event.target).get('password')}});authenticated=true;$('#main-dialog').close();await boot();}catch(error){$('#access-error').textContent=error.message;button.disabled=false;}return;}
+  if(event.target.id==='access-form'){
+    event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;
+    try{
+      await request('/session',{method:'POST',body:{password:new FormData(event.target).get('password')}});
+      authenticated=true;$('#main-dialog').close();
+      if(initialized&&(saveError||sessionChanged||dirty)){
+        updateSaveUI();toast('Доступ восстановлен. Ваши правки сохранены в этой вкладке; повторите сохранение.');
+      }else await boot();
+    }catch(error){$('#access-error').textContent=error.message;button.disabled=false;}
+    return;
+  }
   if(!writable()){event.preventDefault();return;}
   if(event.target.id==='editor-form'){
     event.preventDefault();const form=new FormData(event.target);let patch;

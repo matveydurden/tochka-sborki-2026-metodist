@@ -30,6 +30,12 @@ def materials():
                 slides=[dict(moduleIndex=i,competencyIndices=[0],title='Заголовок',body='Содержание') for i in range(2)])
 
 
+def assessment_response(user,*,lecture_plan='План',question='Вопрос',answer='Ключ',task_text='Задание',criteria='Критерии',slide_title='Слайд',slide_body='Текст',test_count=3,slide_count=4):
+    """A format fixture for the model's named assessment blocks."""
+    return dict(lecturePlan=lecture_plan,assessments={group['key']:dict(tests=[dict(question=question,answerLines=answer.split('\n'))]*test_count,tasks=[dict(text=task_text,criteria=criteria)]) for group in user['assessmentGroups']},
+                slides=[dict(title=slide_title,body=slide_body,competencyIndices=[x['competencyIndex'] for x in user['requiredOutcomes']])]*slide_count)
+
+
 class ServiceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -110,6 +116,77 @@ class ServiceTests(unittest.TestCase):
         recovered=self.generate(record,request_id='diagnostic-retry')
         self.assertEqual(recovered['status'],'completed')
         self.assertIsNotNone(recovered['proposalId'])
+
+    def test_worker_start_failure_is_terminal_and_allows_manual_retry(self):
+        # ERR-01: creating a job must not imply that its worker started.
+        from unittest.mock import patch,Mock
+        record=self.store.create(draft())
+        generator=Mock(return_value=skeleton());self.app.generator=generator
+        body=dict(revision=0,stage='skeleton',prompt='',requestId='worker-start-failure')
+        caught=None
+        with patch('threading.Thread.start',side_effect=RuntimeError('private-thread-details')):
+            try:self.app.generate(record['id'],body)
+            except Exception as error:caught=error
+        self.assertIsInstance(caught,service.Unavailable)
+        generator.assert_not_called()
+        failed=self.store.get(record['id'])
+        self.assertEqual(failed['job']['status'],'failed')
+        self.assertEqual(failed['course'],record['course'])
+        self.assertNotIn('private-thread-details',failed['job']['error'])
+        self.assertEqual(self.generate(record,request_id='worker-manual-retry')['status'],'completed')
+
+    def test_failed_status_write_recovers_without_repeating_generation(self):
+        # ERR-02: storage recovery may retry status writes, never the model call.
+        from unittest.mock import patch,Mock
+        import sqlite3
+        record=self.store.create(draft())
+        job,_=self.store.start_job(record['id'],0,'skeleton','','status-write-failure')
+        generator=Mock(side_effect=RuntimeError('private-model-details'));self.app.generator=generator
+        escaped=None
+        with patch.object(self.store,'connect',side_effect=sqlite3.OperationalError('private-db-details')):
+            try:self.app._run(job['id'],record['id'],0,'skeleton',record['course'],'')
+            except Exception as error:escaped=error
+        self.assertIsNone(escaped,'An error while recording failure must not escape the worker.')
+        recovered=self.store.get(record['id'])
+        self.assertEqual(recovered['job']['status'],'failed')
+        self.assertEqual(recovered['course'],record['course'])
+        self.assertIsNone(recovered['proposal'])
+        self.assertNotIn('private-',recovered['job']['error'])
+        self.assertEqual(generator.call_count,1)
+        self.assertEqual(service.Store(self.db).get(record['id'])['job']['status'],'failed')
+
+    def test_deferred_failure_survives_a_rolled_back_recovery_transaction(self):
+        # ERR-02: an unrelated failed write must not discard a pending failure.
+        from unittest.mock import patch
+        import sqlite3
+        record=self.store.create(draft())
+        job,_=self.store.start_job(record['id'],0,'skeleton','','rolled-back-recovery')
+        self.app.generator=lambda *args:(_ for _ in ()).throw(RuntimeError('model unavailable'))
+        with patch.object(self.store,'connect',side_effect=sqlite3.OperationalError('storage unavailable')):
+            try:self.app._run(job['id'],record['id'],0,'skeleton',record['course'],'')
+            except sqlite3.Error:pass
+        with self.assertRaises(RuntimeError):
+            with self.store.connect():raise RuntimeError('rollback')
+        self.assertEqual(self.store.job(job['id'])['status'],'failed')
+
+    def test_lost_response_reuses_job_after_requirements_or_configuration_change(self):
+        # ERR-03: recovery is lookup of the original request, not a new generation.
+        record=self.store.create(draft())
+        body=dict(revision=0,stage='skeleton',prompt='Запрос',requestId='response-lost-after-completion')
+        first=self.wait(self.app.generate(record['id'],body))
+        self.store.save(record['id'],0,dict(record['course'],audience=''))
+        self.app.generator=None;self.app.config=service.Config(key='')
+        recovered=None
+        try:recovered=self.app.generate(record['id'],body)
+        except (service.Invalid,service.Unavailable):pass
+        self.assertIsNotNone(recovered)
+        self.assertEqual(recovered['id'],first['id'])
+        with self.assertRaises(service.Conflict):self.app.generate(record['id'],dict(body,prompt='Другой запрос'))
+
+    def test_failure_reporting_cannot_overwrite_a_completed_job(self):
+        record=self.store.create(draft());completed=self.generate(record)
+        self.store.fail_job(completed['id'],'Запоздалый отказ',None)
+        self.assertEqual(self.store.job(completed['id']),completed)
 
     def test_materials_require_approval_then_apply_atomically(self):
         record = self.accepted()
@@ -199,7 +276,7 @@ class ServiceTests(unittest.TestCase):
         def complete(system,user,schema):
             seen.append(user)
             if 'explanation' in schema['properties']:return {key:('Подробное объяснение темы '*34) for key in schema['properties']}
-            return dict(content='Подробное объяснение темы',lecturePlan='План лекции',tests=[dict(question='Вопрос',answer='Ответ',competencyIndices=[0])]*3,tasks=[dict(text='Задание',criteria='Критерий',competencyIndices=[0])],slides=[dict(title='Слайд',body='Текст слайда',competencyIndices=[0])]*4)
+            return assessment_response(user,lecture_plan='План лекции',answer='Ответ',criteria='Критерий',slide_body='Текст слайда')
         result=cfg.material_bundle(course,'Практический курс',complete)
         patch=service.proposal_patch('materials',course,result)
         self.assertEqual(len(seen),4)

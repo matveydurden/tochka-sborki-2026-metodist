@@ -13,9 +13,14 @@ from .diagnostics import log_failure
 ROOT=Path(__file__).resolve().parent.parent
 FRONTEND=ROOT/'frontend'
 LOGGER=logging.getLogger(__name__)
+BODY_READ_TIMEOUT=15
 
 
 class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(BODY_READ_TIMEOUT)
+
     def log_request(self,code='-',size='-'):
         # The default HTTP log includes the raw URL and may reveal query secrets.
         LOGGER.info('http_response method=%s status=%s',self.command if self.command in ['GET','POST','PUT','OPTIONS'] else 'OTHER',code)
@@ -40,11 +45,17 @@ class Handler(BaseHTTPRequestHandler):
             LOGGER.debug('http_client_disconnected exception=%s',type(error).__name__)
 
     def body(self,maximum=1_000_000):
+        if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length',[]))!=1:raise Invalid('Требуется однозначный размер JSON-запроса.')
         if self.headers.get_content_type()!='application/json':raise Invalid('Требуется Content-Type application/json.')
         try:length=int(self.headers.get('Content-Length','0'))
         except ValueError:raise Invalid('Некорректный размер запроса.')
         if not 0<length<=maximum:raise Invalid('Запрос пустой или превышает допустимый размер.')
-        try:data=json.loads(self.rfile.read(length))
+        try:raw=self.rfile.read(length)
+        except TimeoutError:
+            self.close_connection=True
+            raise Invalid('Превышено время чтения запроса. Повторите отправку явно.') from None
+        if len(raw)!=length:raise Invalid('Тело запроса получено не полностью.')
+        try:data=json.loads(raw)
         except (ValueError,UnicodeError):raise Invalid('Некорректный JSON.')
         if not isinstance(data,dict):raise Invalid('Ожидается JSON-объект.')
         return data

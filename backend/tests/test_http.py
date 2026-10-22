@@ -83,6 +83,29 @@ class HTTPTests(unittest.TestCase):
         self.assertNotIn('secret-query',diagnostic)
         self.assertNotIn('secret-cookie',diagnostic)
 
+    def test_partial_request_body_times_out_without_mutating_course(self):
+        # ERR-06: a client cannot reserve a worker indefinitely with a partial body.
+        import socket
+        from unittest.mock import patch
+        _,record=self.call('/api/courses',{'course':draft()})
+        with patch('backend.server.BODY_READ_TIMEOUT',.05,create=True):
+            with socket.create_connection(('127.0.0.1',self.server.server_port),timeout=1) as client:
+                client.sendall((f'PUT /api/courses/{record["id"]} HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{{').encode())
+                try:response=client.recv(4096)
+                except TimeoutError:response=b''
+        self.assertIn(b'422',response)
+        self.assertEqual(self.call('/api/courses/'+record['id'])[1],record)
+
+    def test_duplicate_lengths_and_transfer_encoding_are_rejected_for_all_json_routes(self):
+        # ERR-06: body framing checks also apply outside the source-check route.
+        import socket
+        for framing in ['Content-Length: 2\r\nContent-Length: 2','Transfer-Encoding: chunked\r\nContent-Length: 2']:
+            with self.subTest(framing=framing),socket.create_connection(('127.0.0.1',self.server.server_port),timeout=1) as client:
+                client.sendall((f'POST /api/courses HTTP/1.0\r\nHost: 127.0.0.1:{self.server.server_port}\r\nContent-Type: application/json\r\n{framing}\r\n\r\n{{}}').encode())
+                response=b''.join(iter(lambda:client.recv(4096),b''))
+                self.assertIn(b'422',response)
+                self.assertIn('однозначный'.encode(),response)
+
     def test_extract_and_exports_use_real_routes(self):
         import base64
         status,result=self.call('/api/references/extract',dict(name='brief.txt',data=base64.b64encode('ИИ для учителей'.encode()).decode()))
