@@ -37,6 +37,17 @@ class AccessTests(unittest.TestCase):
         self.assertEqual(self.call('/api/courses',{'course':draft()},'metodist_session=fake')[0],401)
     def test_external_origin_rejected_even_during_login(self):
         self.assertEqual(self.call('/api/session',{'password':'team-secret'},headers={'Origin':'https://evil.example'})[0],403)
+
+    def test_cookie_parser_failure_is_diagnosed_and_access_stays_closed(self):
+        from unittest.mock import patch
+        with self.assertLogs('backend.access',level='WARNING') as logs:
+            with patch('backend.access.SimpleCookie',side_effect=RuntimeError('secret-cookie')):
+                status,body,_=self.call('/api/status',cookie='metodist_session=secret-cookie')
+        self.assertEqual(status,200)
+        self.assertFalse(body['authenticated'])
+        diagnostic='\n'.join(logs.output)
+        self.assertIn('RuntimeError',diagnostic)
+        self.assertNotIn('secret-cookie',diagnostic)
     def test_external_binding_requires_password_and_https_origin(self):
         app=self.server.app
         with self.assertRaises(ValueError):make_server(app,0,host='0.0.0.0')

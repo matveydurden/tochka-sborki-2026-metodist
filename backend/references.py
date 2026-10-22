@@ -2,11 +2,14 @@
 import base64
 import binascii
 import io
+import logging
 import zipfile
 from pathlib import PurePath
 from .service import Invalid, text
+from .diagnostics import log_failure
 
 MAX_FILE=20*1024*1024
+LOGGER=logging.getLogger(__name__)
 
 
 def extract(body):
@@ -46,4 +49,6 @@ def extract(body):
         if not content.strip():raise Invalid('Не найден текст. Для скана PDF нужен OCR; загрузите документ с текстовым слоем.')
         return dict(name=name,text=text(content,'Текст референса',60000,True))
     except Invalid:raise
-    except Exception:raise Invalid('Не удалось прочитать файл. Проверьте формат; TXT должен быть в UTF-8.') from None
+    except Exception as error:
+        log_failure(LOGGER,'reference_extraction_failed',error,level=logging.WARNING)
+        raise Invalid('Не удалось прочитать файл. Проверьте формат; TXT должен быть в UTF-8.') from None

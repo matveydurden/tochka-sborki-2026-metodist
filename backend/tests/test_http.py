@@ -53,6 +53,36 @@ class HTTPTests(unittest.TestCase):
         with urllib.request.urlopen(self.url+path+'/export.docx') as response:
             self.assertTrue(response.read().startswith(b'PK'))
 
+    def test_failed_save_is_diagnosed_without_secrets_and_can_be_retried(self):
+        from unittest.mock import patch
+        import sqlite3
+        _,record=self.call('/api/courses',{'course':draft()})
+        path='/api/courses/'+record['id']
+        body=dict(revision=0,course=dict(record['course'],goal='Ручная цель'))
+        for failure,status in [(sqlite3.OperationalError('secret-db-value'),503),(RuntimeError('secret-db-value'),500)]:
+            with self.subTest(status=status):
+                with self.assertLogs('backend.server',level='ERROR') as logs:
+                    with patch.object(self.app.store,'save',side_effect=failure):
+                        actual,error=self.call(path,body,'PUT')
+                    self.assertEqual(actual,status)
+                    self.assertIn('error',error)
+                diagnostic='\n'.join(logs.output)
+                self.assertIn(type(failure).__name__,diagnostic)
+                self.assertIn('server.py:',diagnostic)
+                self.assertNotIn('secret-db-value',diagnostic+json.dumps(error))
+                self.assertEqual(self.call(path)[1],record)
+        saved=self.call(path,body,'PUT')
+        self.assertEqual(saved[0],200)
+        self.assertEqual(saved[1]['course']['goal'],'Ручная цель')
+
+    def test_access_log_does_not_include_query_or_cookie(self):
+        with self.assertLogs('backend.server',level='INFO') as logs:
+            self.assertEqual(self.call('/api/status?key=secret-query',headers={'Cookie':'metodist_session=secret-cookie'})[0],200)
+        diagnostic='\n'.join(logs.output)
+        self.assertIn('200',diagnostic)
+        self.assertNotIn('secret-query',diagnostic)
+        self.assertNotIn('secret-cookie',diagnostic)
+
     def test_extract_and_exports_use_real_routes(self):
         import base64
         status,result=self.call('/api/references/extract',dict(name='brief.txt',data=base64.b64encode('ИИ для учителей'.encode()).decode()))

@@ -35,9 +35,26 @@ class URLCheckTests(unittest.TestCase):
                 self.assertEqual(head.call_args.args[:3],('example.org','/path?q=1',PUBLIC[0]))
 
     def test_transport_failure_is_sanitized(self):
-        with patch.object(urlcheck,'_resolve',return_value=PUBLIC),patch.object(urlcheck,'_head',side_effect=ssl.SSLError('private details')):
-            result=urlcheck.check('https://example.org')
+        with self.assertLogs('backend.urlcheck',level='WARNING') as logs:
+            with patch.object(urlcheck,'_resolve',return_value=PUBLIC),patch.object(urlcheck,'_head',side_effect=ssl.SSLError('private details')):
+                result=urlcheck.check('https://example.org/?key=private-query')
         self.assertEqual(result['status'],'error');self.assertNotIn('private details',str(result))
+        diagnostic='\n'.join(logs.output)
+        self.assertIn('SSLError',diagnostic)
+        self.assertNotIn('private details',diagnostic)
+        self.assertNotIn('private-query',diagnostic)
+        with patch.object(urlcheck,'_resolve',return_value=PUBLIC),patch.object(urlcheck,'_head',return_value=200):
+            self.assertEqual(urlcheck.check('https://example.org')['status'],'accessible')
+
+    def test_dns_worker_preserves_failure_type_in_safe_diagnostics(self):
+        with self.assertLogs('backend.urlcheck',level='WARNING') as logs:
+            with patch('socket.getaddrinfo',side_effect=socket.gaierror('private-dns-details')):
+                result=urlcheck.check('https://example.org/?key=private-query')
+        self.assertEqual(result['status'],'error')
+        diagnostic='\n'.join(logs.output)
+        self.assertIn('gaierror',diagnostic)
+        self.assertNotIn('private-dns-details',diagnostic)
+        self.assertNotIn('private-query',diagnostic)
 
     def test_connection_pins_resolved_ip_and_keeps_hostname_for_tls(self):
         context=MagicMock();raw=MagicMock();wrapped=MagicMock();context.wrap_socket.return_value=wrapped

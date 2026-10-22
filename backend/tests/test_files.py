@@ -26,3 +26,11 @@ class FileTests(unittest.TestCase):
         pdf=PdfWriter();pdf.add_blank_page(width=200,height=200)
         buffer=io.BytesIO();pdf.write(buffer)
         with self.assertRaisesRegex(service.Invalid,'текст|OCR'):self.extract('scan.pdf',buffer.getvalue())
+
+    def test_parser_failure_is_diagnosed_without_file_name_or_content(self):
+        with self.assertLogs('backend.references',level='WARNING') as logs:
+            with self.assertRaises(service.Invalid):self.extract('secret-filename.txt',b'\xffsecret-file-content')
+        diagnostic='\n'.join(logs.output)
+        self.assertIn('UnicodeDecodeError',diagnostic)
+        self.assertNotIn('secret-filename',diagnostic)
+        self.assertNotIn('secret-file-content',diagnostic)

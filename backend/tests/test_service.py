@@ -91,6 +91,26 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.store.get(record['id'])['revision'], record['revision'])
         self.assertIsNone(self.store.get(record['id'])['proposal'])
 
+    def test_unexpected_generation_failure_is_diagnosed_and_retry_recovers(self):
+        record=self.store.create(draft())
+        def failed_generator(*args):
+            raise RuntimeError('secret-provider-body')
+        self.app.generator=failed_generator
+        with self.assertLogs('backend.service',level='ERROR') as logs:
+            failed=self.generate(record,request_id='diagnostic-failed')
+        diagnostic='\n'.join(logs.output)
+        self.assertIn('RuntimeError',diagnostic)
+        self.assertIn(failed['id'],diagnostic)
+        self.assertIn('failed_generator',diagnostic)
+        self.assertNotIn('secret-provider-body',diagnostic+json.dumps(failed))
+        self.assertEqual(failed['status'],'failed')
+        self.assertEqual(self.store.get(record['id'])['course'],record['course'])
+        self.assertIsNone(self.store.get(record['id'])['proposal'])
+        self.app.generator=lambda *args:skeleton()
+        recovered=self.generate(record,request_id='diagnostic-retry')
+        self.assertEqual(recovered['status'],'completed')
+        self.assertIsNotNone(recovered['proposalId'])
+
     def test_materials_require_approval_then_apply_atomically(self):
         record = self.accepted()
         with self.assertRaises(service.Conflict): self.app.generate(record['id'], dict(revision=record['revision'],stage='materials',prompt='',requestId='mat1'))
@@ -267,6 +287,26 @@ class DeadlineTests(unittest.TestCase):
         self.assertIn('время',job['error'].lower())
         self.assertEqual(self.store.get(record['id'])['course']['modules'],[])
         self.assertIsNone(self.store.get(record['id'])['proposal'])
+
+class ProviderFailureTests(unittest.TestCase):
+    def test_provider_failures_log_original_type_without_credentials_or_response(self):
+        import urllib.error
+        from unittest.mock import patch
+        failures=[(urllib.error.HTTPError('https://example.org/?key=secret-provider',status,'secret-provider',{},io.BytesIO(b'secret-provider')),status)
+                  for status in [401,403,429,503]]
+        failures.extend([(TimeoutError('secret-provider'),None),(ValueError('secret-provider'),None)])
+        for failure,status in failures:
+            with self.subTest(failure=type(failure).__name__,status=status):
+                config=service.Config(key='secret-provider')
+                with self.assertLogs('backend.service',level='ERROR') as logs:
+                    with patch('urllib.request.OpenerDirector.open',side_effect=failure):
+                        with self.assertRaises(service.Unavailable) as caught:
+                            config._complete('instruction',{'prompt':'secret-provider'},{})
+                diagnostic='\n'.join(logs.output)
+                self.assertIn(type(failure).__name__,diagnostic)
+                if status:self.assertIn(str(status),diagnostic)
+                self.assertNotIn('secret-provider',diagnostic+str(caught.exception))
+                self.assertEqual(config.attempted_calls,1)
 
 class DurationApprovalTests(unittest.TestCase):
     setUp=ServiceTests.setUp

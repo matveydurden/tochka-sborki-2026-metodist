@@ -5,6 +5,7 @@ Network calls happen outside SQLite transactions.
 """
 import copy
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -16,6 +17,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from .diagnostics import log_failure
+
+LOGGER=logging.getLogger(__name__)
 
 
 class Invalid(Exception): pass
@@ -322,11 +326,13 @@ class Config:
             if content.startswith('```'): content=content.split('\n',1)[1].rsplit('```',1)[0]
             return json.loads(content)
         except urllib.error.HTTPError as exc:
+            log_failure(LOGGER,'model_http_failed',exc,status=exc.code)
             exc.close()
             if exc.code in (401,403): raise Unavailable('Cloud.ru отклонил ключ или доступ к модели.') from None
             if exc.code==429: raise Unavailable('Cloud.ru: лимит запросов или токенов. Повторите позже.') from None
             raise Unavailable(f'Cloud.ru вернул ошибку {exc.code}. Программа сохранена.') from None
-        except (OSError,TimeoutError,ValueError,KeyError,IndexError,TypeError):
+        except (OSError,TimeoutError,ValueError,KeyError,IndexError,TypeError) as exc:
+            log_failure(LOGGER,'model_response_failed',exc)
             raise Unavailable('Не удалось получить корректный ответ Cloud.ru. Программа сохранена; можно повторить запрос.') from None
 
 
@@ -415,6 +421,7 @@ class Application:
                 db.execute("UPDATE jobs SET status='completed',proposal_id=? WHERE id=?",(proposal_id,job_id))
         except Exception as exc:
             # Provider bodies and credentials never enter logs or API errors.
+            log_failure(LOGGER,'generation_failed',exc,job_id=job_id,stage=stage)
             message=str(exc) if isinstance(exc,(Invalid,Conflict,Unavailable)) else 'Не удалось подготовить комплект. Программа сохранена; повторите запрос.'
             with self.store.connect() as db:
                 db.execute('INSERT OR REPLACE INTO job_metrics VALUES(?,?)',(job_id,dumps(metrics())))

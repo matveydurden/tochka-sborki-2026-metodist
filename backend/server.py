@@ -1,19 +1,27 @@
 """Single-user HTTP API: local mode or public read-only demo with team sessions."""
 import argparse
 import json
+import logging
 import os
 import sqlite3
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit,unquote
 from .service import Application,Store,Config,Invalid,Conflict,NotFound,Unavailable,dumps,export_docx,env_values
+from .diagnostics import log_failure
 
 ROOT=Path(__file__).resolve().parent.parent
 FRONTEND=ROOT/'frontend'
+LOGGER=logging.getLogger(__name__)
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self,*args): pass
+    def log_request(self,code='-',size='-'):
+        # The default HTTP log includes the raw URL and may reveal query secrets.
+        LOGGER.info('http_response method=%s status=%s',self.command if self.command in ['GET','POST','PUT','OPTIONS'] else 'OTHER',code)
+
+    def log_message(self,*args):
+        LOGGER.warning('http_protocol_error')
 
     def reply(self,status,value,content_type='application/json; charset=utf-8',filename=None,headers=None):
         data=dumps(value).encode() if content_type.startswith('application/json') and not isinstance(value,bytes) else value
@@ -28,7 +36,8 @@ class Handler(BaseHTTPRequestHandler):
         for key,value in (headers or {}).items():self.send_header(key,value)
         self.end_headers()
         try:self.wfile.write(data)
-        except (BrokenPipeError,ConnectionResetError):pass
+        except (BrokenPipeError,ConnectionResetError) as error:
+            LOGGER.debug('http_client_disconnected exception=%s',type(error).__name__)
 
     def body(self,maximum=1_000_000):
         if self.headers.get_content_type()!='application/json':raise Invalid('Требуется Content-Type application/json.')
@@ -119,8 +128,12 @@ class Handler(BaseHTTPRequestHandler):
         try:self.dispatch()
         except (Invalid,Conflict,NotFound,Unavailable) as exc:
             self.reply({Invalid:422,Conflict:409,NotFound:404,Unavailable:503}[type(exc)],dict(error=str(exc)))
-        except (sqlite3.Error,OSError):self.reply(503,dict(error='Не удалось сохранить данные на сервере. Повторите запрос.'))
-        except Exception:self.reply(500,dict(error='Ошибка сервера. Сохранённая программа не изменена.'))
+        except (sqlite3.Error,OSError) as error:
+            log_failure(LOGGER,'http_dependency_failed',error,status=503)
+            self.reply(503,dict(error='Не удалось сохранить данные на сервере. Повторите запрос.'))
+        except Exception as error:
+            log_failure(LOGGER,'http_request_failed',error,status=500)
+            self.reply(500,dict(error='Ошибка сервера. Сохранённая программа не изменена.'))
 
     do_GET=handle_request
     do_POST=handle_request
@@ -142,6 +155,7 @@ def make_server(app,port=4173,config_loader=None,host='127.0.0.1',password='',pu
 
 
 def main():
+    logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
     parser=argparse.ArgumentParser(description='Методист — локальный сервер')
     parser.add_argument('--port',type=int,default=4173)
     parser.add_argument('--db',type=Path,default=ROOT/'.local/metodist.sqlite3')

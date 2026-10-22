@@ -1,8 +1,12 @@
 """Ephemeral team sessions for the public read-only hackathon demo."""
 import secrets
+import logging
 import threading
 import time
 from http.cookies import SimpleCookie
+from .diagnostics import log_failure
+
+LOGGER=logging.getLogger(__name__)
 
 class Access:
     def __init__(self,password='',secure=False):
@@ -11,7 +15,9 @@ class Access:
         try:
             cookie=SimpleCookie();cookie.load(header or '')
             return cookie['metodist_session'].value if 'metodist_session' in cookie else ''
-        except Exception:return ''
+        except Exception as error:
+            log_failure(LOGGER,'session_cookie_rejected',error,level=logging.WARNING)
+            return ''
     def authenticated(self,header):
         if not self.password:return True
         with self.lock:return self.sessions.get(self.token(header),0)>time.time()

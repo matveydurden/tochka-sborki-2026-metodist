@@ -1,17 +1,20 @@
 """Explicit, bounded availability probes. Never confirms the truth of a source."""
 import http.client
 import ipaddress
+import logging
 import queue
 import socket
 import ssl
 import threading
 from urllib.parse import urlsplit, quote
 from .service import Invalid, now, text
+from .diagnostics import log_failure
 
 DNS_TIMEOUT=3
 NETWORK_TIMEOUT=5
 _DNS_SLOTS=threading.BoundedSemaphore(4)
 _REQUEST_SLOTS=threading.BoundedSemaphore(4)
+LOGGER=logging.getLogger(__name__)
 
 
 def _public(address):
@@ -28,7 +31,9 @@ def _resolve(host):
     result=queue.Queue(maxsize=1)
     def resolve():
         try:result.put(socket.getaddrinfo(host,443,type=socket.SOCK_STREAM))
-        except OSError:result.put(None)
+        except OSError as error:
+            log_failure(LOGGER,'source_dns_failed',error,level=logging.WARNING)
+            result.put(None)
         finally:slots.release()
     try:threading.Thread(target=resolve,daemon=True).start()
     except Exception:
@@ -62,7 +67,8 @@ def _head(host,target,address):
         sock=connection.sock
         if sock is not None:
             try:sock.shutdown(socket.SHUT_RDWR)
-            except OSError:pass
+            except OSError as error:
+                LOGGER.debug('source_socket_already_closed exception=%s',type(error).__name__)
             sock.close()
     timer=threading.Timer(NETWORK_TIMEOUT,expire);timer.daemon=True;timer.start()
     try:
@@ -100,6 +106,7 @@ def check(value):
         elif code in [405,501]:status,message='unsupported','Сайт не поддерживает HEAD. Проверка содержимого не выполнялась.'
         else:status,message='unavailable','Сайт вернул ошибку. Проверьте адрес или повторите позже.'
         return dict(status=status,httpStatus=code,checkedAt=now(),message=message)
-    except (OSError,http.client.HTTPException):
+    except (OSError,http.client.HTTPException) as error:
+        log_failure(LOGGER,'source_check_failed',error,level=logging.WARNING)
         return dict(status='error',httpStatus=None,checkedAt=now(),message='Не удалось проверить ссылку: ошибка DNS, TLS, сети или превышение времени. Подтверждение источника не изменено.')
     finally:_REQUEST_SLOTS.release()
